@@ -27,4 +27,8 @@ Tarih: 2026-11-26
 | Kayıt aralığı | **Karar: 5 dakikada bir kayıt.** STM32 bu sürede sık örnekleyip **ortalamayı** göndermeli (firmware) |
 
 ## Henüz başlanmayan
-- Phase 3: STM32 firmware · Phase 4: React arayüz · ML altyapısı · systemd servisi
+- Phase 3: STM32 firmware · ML altyapısı · systemd servisi
+
+## Arayüz (Phase 4, ilk sürüm)
+- React + TypeScript + Vite + Recharts; 5 sekme. Simülasyon verisiyle uçtan uca denendi.
+- Eksik: UNO Q üzerinde backend'in `dist/` klasörünü servis etmesi, BLE ile alınan verinin arayüze bağlanması.

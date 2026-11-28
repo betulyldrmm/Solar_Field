@@ -1,0 +1,207 @@
+// Typed client for the FastAPI backend (see docs/api.md).
+// Field names mirror backend/app/models/schemas.py — units are in the suffix.
+
+export type DataSource = "simulation" | "hardware";
+export type ValueKind = "measured" | "assumed" | "calculated" | "estimated";
+
+export interface Measurement {
+  timestamp_utc: string;
+  boot_id: string;
+  sequence: number;
+  voltage_v: number | null;
+  current_a: number | null;
+  power_w: number | null;
+  panel_temperature_c: number | null;
+  ambient_temperature_c: number | null;
+  case_temperature_c: number | null;
+  battery_voltage_v: number | null;
+  battery_current_a: number | null;
+  fan_state: boolean | null;
+  sensor_status: string;
+  sensor_states: Record<string, string>;
+  quality_flags: string[];
+  data_source: DataSource;
+}
+
+export interface MeasurementPage {
+  items: Measurement[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface BatteryStatus {
+  voltage_v: number | null;
+  current_a: number | null;
+  soc_pct_estimated: number | null;
+  series_cells: number;
+  note: string;
+}
+
+export interface DeviceStatus {
+  device_status: "online" | "stale" | "offline" | "sleeping";
+  data_mode: DataSource;
+  last_measurement_utc: string | null;
+  age_s: number | null;
+  sensor_status: string | null;
+  sensor_states: Record<string, string>;
+  fan_state: boolean | null;
+  battery: BatteryStatus;
+  scheduled_on: boolean;
+  next_shutdown_utc: string | null;
+  next_wake_utc: string | null;
+  bridge: string;
+  measurements_total: number;
+}
+
+export interface DailyEnergy {
+  date: string;
+  reference_energy_wh: number;
+  insolation_kwh_m2: number | null;
+  insolation_kind: ValueKind;
+  daylight_coverage: number;
+  sample_count: number;
+  gap_count: number;
+  irradiance_weighted_panel_temp_c: number | null;
+  complete: boolean;
+  data_source: string;
+}
+
+export interface EnergySummary {
+  today: DailyEnergy | null;
+  days_available: number;
+  complete_days: number;
+  mean_insolation_kwh_m2: number | null;
+  calibration_status: "calibrated" | "uncalibrated";
+  data_source: string;
+}
+
+export interface SystemConfig {
+  panel_power_w: number;
+  panel_count: number;
+  performance_ratio: number;
+  temp_coefficient_pct_per_c: number;
+  tilt_deg: number;
+  azimuth_deg: number;
+  reference_mode: "short_circuit" | "resistive_load";
+  ref_isc_per_wm2_a: number;
+  ref_calibrated: boolean;
+  ref_isc_temp_coeff_per_c: number;
+  measurement_interval_s: number;
+  fan_on_c: number;
+  fan_off_c: number;
+  night_shutdown_enabled: boolean;
+  shutdown_after_sunset_min: number;
+  wake_before_sunrise_min: number;
+}
+
+export interface SystemConfigOut extends SystemConfig {
+  installed_kwp: number;
+  data_mode: DataSource;
+}
+
+export interface EstimateRequest {
+  panel_power_w: number;
+  panel_count: number;
+  performance_ratio: number;
+  temp_coefficient_pct_per_c: number;
+  tilt_deg: number;
+  azimuth_deg: number;
+  method: "auto" | "measured_reference" | "theoretical_psh";
+  peak_sun_hours: number | null;
+  days: number;
+}
+
+export interface LabeledValue {
+  value: number | null;
+  unit: string;
+  kind: ValueKind;
+  note: string;
+}
+
+export interface EstimateResponse {
+  method: "measured_reference" | "theoretical_psh";
+  installed_kwp: number;
+  daily_energy_kwh: number;
+  per_day: Record<string, number | string>[];
+  inputs: Record<string, LabeledValue>;
+  calibration_status: "calibrated" | "uncalibrated" | "not_applicable";
+  data_source: string;
+  warnings: string[];
+}
+
+export interface DeviceEvent {
+  id: number;
+  timestamp_utc: string;
+  level: string;
+  kind: string;
+  message: string;
+}
+
+export interface SensorError {
+  id: number;
+  timestamp_utc: string;
+  sensor: string;
+  error: string;
+  measurement_sequence: number | null;
+}
+
+export interface EventsResponse {
+  events: DeviceEvent[];
+  sensor_errors: SensorError[];
+}
+
+export class ApiError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+  }
+}
+
+const BASE = import.meta.env.VITE_API_BASE ?? "/api";
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(BASE + path, init);
+  } catch {
+    throw new ApiError(0, "Backend'e ulaşılamıyor. uvicorn çalışıyor mu?");
+  }
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const body = await res.json();
+      detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+    } catch {
+      /* not JSON */
+    }
+    throw new ApiError(res.status, detail);
+  }
+  return (await res.json()) as T;
+}
+
+export const api = {
+  deviceStatus: () => request<DeviceStatus>("/device/status"),
+  latest: () => request<Measurement>("/measurements/latest"),
+  history: (startIso: string, limit = 5000) =>
+    request<MeasurementPage>(
+      `/measurements/history?start=${encodeURIComponent(startIso)}&limit=${limit}&order=asc`,
+    ),
+  energyDaily: (days = 14) => request<DailyEnergy[]>(`/energy/daily?days=${days}`),
+  energySummary: () => request<EnergySummary>("/energy/summary"),
+  estimate: (body: EstimateRequest) =>
+    request<EstimateResponse>("/simulation/estimate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  config: () => request<SystemConfigOut>("/config"),
+  saveConfig: (cfg: SystemConfig, token: string) =>
+    request<SystemConfigOut>("/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "X-API-Token": token },
+      body: JSON.stringify(cfg),
+    }),
+  events: (limit = 100) => request<EventsResponse>(`/events?limit=${limit}`),
+  csvUrl: (startIso?: string) =>
+    `${BASE}/measurements/export.csv${startIso ? `?start=${encodeURIComponent(startIso)}` : ""}`,
+};
