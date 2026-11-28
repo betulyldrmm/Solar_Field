@@ -1,4 +1,4 @@
-# ☀️ Solar Field Station
+#  Solar Field Station
 
 **Güneş Enerjisi Sistemleri İçin Bağımsız Saha Ön Ölçüm ve Simülasyon İstasyonu**
 
@@ -175,7 +175,4 @@ frontend/                      React arayüz (sonraki aşama)
 | Phase 5 | Kalibrasyon, yeterli veri olursa ML | ⏳ |
 | Phase 6 | Saha testi: önce 48 saat, sonra uzun süreli | ⏳ |
 
-**Sınırlamalar:**
-- Birkaç günlük ölçüm yıllık üretimi temsil etmez; sonuç bir **ön ölçümdür**.
-- Referans panel kalibre edilmeden hata ±%20'yi aşabilir.
-- UNO Q Bridge API'si, RTC bağlantısı, BLE sunucu rolü ve gece kapatma devresi henüz donanımda doğrulanmadı.
+
