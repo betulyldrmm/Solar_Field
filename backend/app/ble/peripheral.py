@@ -1,7 +1,8 @@
 """BLE GATT server (peripheral) — runs on the UNO Q Linux side.
 
-It advertises as "SolarFieldStation" and sends the newest stored measurement
-as a 20-byte notification (see protocol.py). Measuring and storing do NOT
+It advertises as "SolarFieldStation", sends the newest stored measurement
+as a 20-byte notification (see protocol.py) and answers history requests
+with every stored record the PC does not have yet (see history.py). Measuring and storing do NOT
 depend on this process: if BLE crashes or nobody is connected, the backend
 keeps logging to SQLite/CSV.
 
@@ -29,6 +30,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from app.ble.history import HISTORY_CTRL_UUID, HISTORY_DATA_UUID, HistoryError, HistoryServer
 from app.ble.protocol import DEVICE_NAME, LIVE_CHAR_UUID, LIVE_PACKET_SIZE, SERVICE_UUID, encode_live
 from app.config import Settings
 from app.storage.database import Database
@@ -48,24 +50,49 @@ class LatestSource:
 
 
 class DemoSource(LatestSource):
-    """Self-contained simulator -> ingest -> temp SQLite. Always data_source=simulation."""
+    """Self-contained simulator -> ingest -> temp SQLite. Always data_source=simulation.
 
-    def __init__(self, settings: Settings):
+    Pre-fills `history_days` of 5-minute history (night shutdown respected) so
+    the PC has something to sync."""
+
+    def __init__(self, settings: Settings, history_days: float = 2.0):
+        from datetime import UTC, datetime, timedelta
+
         from app.services.ingest import IngestService
+        from app.services.power_schedule import is_scheduled_on
         from app.simulation.simulator import Simulator
 
         tmp = Path(tempfile.mkdtemp(prefix="sfs_ble_demo_"))
         super().__init__(Database(tmp / "demo.db"), "simulation")
+        self.settings = settings
         self.sim = Simulator(latitude_deg=settings.latitude_deg, longitude_deg=settings.longitude_deg,
                              series_cells=settings.battery_series_cells, seed=settings.simulator_seed)
         self.ingest = IngestService(self.db, None, "simulation")
+        self._is_on = lambda t: is_scheduled_on(t, self.db.load_config(), settings.latitude_deg,
+                                                settings.longitude_deg, settings.timezone)
+        now = datetime.now(UTC)
+        t = now - timedelta(days=history_days)
+        while t < now:
+            self._step(t)
+            t += timedelta(minutes=5)
+        log.info("demo DB: %d records", self.db.count_measurements())
+
+    def _step(self, when) -> None:
+        if not self._is_on(when):
+            self.sim.power_off(when)
+            return
+        self.sim.power_on(when)
+        msg = self.sim.sample(when)
+        if msg is not None:
+            self.ingest.ingest(msg, received_at=when)
 
     def latest(self):
         from datetime import UTC, datetime
 
-        msg = self.sim.sample(datetime.now(UTC))
-        if msg is not None:
-            self.ingest.ingest(msg)
+        last = super().latest()
+        now = datetime.now(UTC)
+        if last is None or (now - last.timestamp_utc).total_seconds() >= 300:
+            self._step(now)  # demo keeps the real 5-minute cadence
         return super().latest()
 
 
@@ -78,7 +105,29 @@ async def serve(source: LatestSource, interval_s: float) -> None:
     def on_read(characteristic, **_kwargs):  # a plain read returns the newest packet too
         return last_packet
 
+    loop = asyncio.get_running_loop()
+    history_lock = asyncio.Lock()
+    history = HistoryServer(source.db, source.data_mode)  # keeps last batch for RESEND
+
+    async def send_history(raw: bytes) -> None:
+        async with history_lock:  # one request at a time
+            try:
+                chunks = await asyncio.to_thread(history.handle, raw)
+            except HistoryError as e:
+                log.warning("bad history request: %s", e)
+                return
+            for chunk in chunks:
+                server.get_characteristic(HISTORY_DATA_UUID).value = bytearray(chunk)
+                server.update_value(SERVICE_UUID, HISTORY_DATA_UUID)
+                await asyncio.sleep(0.015)  # don't overrun the BlueZ notification queue
+            log.info("history: sent %d chunk(s)", len(chunks))
+
+    def on_write(characteristic, value, **_kwargs):
+        if str(characteristic.uuid).lower() == HISTORY_CTRL_UUID:
+            asyncio.run_coroutine_threadsafe(send_history(bytes(value)), loop)
+
     server.read_request_func = on_read
+    server.write_request_func = on_write
     await server.add_new_service(SERVICE_UUID)
     await server.add_new_characteristic(
         SERVICE_UUID,
@@ -86,6 +135,16 @@ async def serve(source: LatestSource, interval_s: float) -> None:
         GATTCharacteristicProperties.read | GATTCharacteristicProperties.notify,
         bytearray(last_packet),
         GATTAttributePermissions.readable,
+    )
+    await server.add_new_characteristic(
+        SERVICE_UUID, HISTORY_CTRL_UUID,
+        GATTCharacteristicProperties.write,
+        None, GATTAttributePermissions.writeable,
+    )
+    await server.add_new_characteristic(
+        SERVICE_UUID, HISTORY_DATA_UUID,
+        GATTCharacteristicProperties.notify,
+        None, GATTAttributePermissions.readable,
     )
     await server.start()
     log.info("advertising as %s (service %s)", DEVICE_NAME, SERVICE_UUID)

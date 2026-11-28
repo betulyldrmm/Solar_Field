@@ -215,6 +215,29 @@ class Database:
             rows = self._conn.execute(sql, params).fetchall()
         return [self._row_to_measurement(r) for r in rows]
 
+    def measurements_after_id(
+        self, after_id: int, limit: int, source: str | None = None
+    ) -> list[tuple[int, Measurement]]:
+        """Rows with id > after_id in id order (used by BLE history sync)."""
+        clauses, params = ["id > ?"], [after_id]
+        if source is not None:
+            clauses.append("data_source = ?")
+            params.append(source)
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT * FROM measurements WHERE {' AND '.join(clauses)} ORDER BY id ASC LIMIT ?",
+                [*params, limit],
+            ).fetchall()
+        return [(int(r["id"]), self._row_to_measurement(r)) for r in rows]
+
+    def max_measurement_id(self, source: str | None = None) -> int:
+        sql, params = "SELECT COALESCE(MAX(id), 0) FROM measurements", []
+        if source is not None:
+            sql += " WHERE data_source = ?"
+            params.append(source)
+        with self._lock:
+            return int(self._conn.execute(sql, params).fetchone()[0])
+
     def count_measurements(
         self, start: datetime | None = None, end: datetime | None = None, source: str | None = None
     ) -> int:

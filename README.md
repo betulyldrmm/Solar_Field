@@ -8,9 +8,9 @@ gerçek güneş ışınımını ölçer ve kullanıcının planladığı sistemi
 o noktada **günde kaç kWh üreteceğini** tahmin eder. Amaç: katalog değeri yerine
 sahada ölçülmüş veriye dayanan bir ön fizibilite.
 
-> **Durum:** Backend + simülasyon tamam, **67 test geçiyor**. React arayüzü
-> çalışıyor (simülasyon verisiyle). BLE canlı veri aktarımı yazıldı (donanımda
-> denenmedi). STM32 firmware henüz yok. Ayrıntı: [`docs/status.md`](docs/status.md)
+> **Durum:** Backend + simülasyon tamam, **83 test geçiyor**. React arayüzü
+> çalışıyor (simülasyon verisiyle). BLE canlı veri + geçmiş senkronizasyonu yazıldı
+> (donanımda denenmedi). STM32 firmware henüz yok. Ayrıntı: [`docs/status.md`](docs/status.md)
 
 ---
 
@@ -112,20 +112,21 @@ Ayarlar ortam değişkenleriyle yapılır (`SFS_*`): örnek için [`.env.example
 **Testler:**
 ```bash
 cd backend
-pytest -q        # 67 test
+pytest -q        # 83 test
 ruff check .
 ```
 
 ## Bluetooth (BLE) ile veri alma
 
-UNO Q `SolarFieldStation` adıyla yayın yapar; bilgisayar bağlanınca canlı
-ölçümleri **20 baytlık** bildirimlerle alır (parçalamaya gerek kalmaz). Alınan
-veriler ekrana basılır ve `pc_receiver/received/` altına CSV olarak eklenir.
+UNO Q `SolarFieldStation` adıyla yayın yapar. Bilgisayar bağlanınca önce
+**istasyonda biriken tüm kayıtları** çeker (kayıp parçaları tekrar ister, CRC32 ile
+doğrular), kendi veritabanına (`backend/data_ble`) yazar; sonra **canlı** ölçümleri
+dinler. Bu veritabanı PC'deki backend + arayüzle görüntülenir.
 
 ```powershell
 # Bilgisayar tarafı
 pip install -r pc_receiver/requirements.txt
-python pc_receiver/ble_receiver.py --fake     # Bluetooth olmadan test
+python pc_receiver/ble_receiver.py --fake     # Bluetooth olmadan: sahte istasyon + kayıplı bağlantı
 python pc_receiver/ble_receiver.py --scan     # yakındaki cihazları listele
 python pc_receiver/ble_receiver.py            # istasyona bağlan ve dinle
 ```
@@ -137,8 +138,9 @@ python -m app.ble.peripheral                  # backend'in veritabanından
 ```
 
 UNO Q gelmeden iki laptopla da denenebilir (biri `--demo` ile istasyon rolünde).
-Protokol, UUID'ler ve donanım doğrulama listesi: [`docs/ble.md`](docs/ble.md).
-Geçmiş veri senkronizasyonu tasarlandı, henüz yazılmadı.
+Alınan veriyi arayüzde görmek için backend'i `SFS_DATA_DIR=data_ble` ve
+`SFS_RUN_SIMULATOR=false` ile başlat. Protokol, UUID'ler ve donanım doğrulama
+listesi: [`docs/ble.md`](docs/ble.md).
 
 ## Enerji ve tahmin yöntemi
 
@@ -169,7 +171,8 @@ Günlük:   H = Σ G·Δt                                      [kWh/m²]
 backend/
   app/
     api/routes.py              FastAPI endpoint'leri
-    ble/                       BLE protokolü (protocol.py) + UNO Q GATT sunucusu (peripheral.py)
+    ble/                       BLE: canlı paket (protocol.py), geçmiş senk. (history.py, client_sync.py),
+                               UNO Q GATT sunucusu (peripheral.py)
     models/schemas.py          Pydantic modelleri (alan adlarında birim: _v, _a, _c, _s ...)
     services/
       validator.py             STM32 mesaj doğrulama (schema v1)
@@ -182,7 +185,7 @@ backend/
     simulation/simulator.py    sentetik ama fiziksel olarak makul veri
     storage/                   database.py (SQLite), csv_logger.py
   scripts/seed_simulation.py   hızlı sentetik geçmiş üretimi
-  tests/                       67 test
+  tests/                       83 test
 pc_receiver/                   bilgisayar tarafı BLE alıcısı (Bleak)
 docs/                          mimari, enerji modeli, kalibrasyon, API, BLE, durum
 firmware/                      STM32 (sonraki aşama)
@@ -194,7 +197,7 @@ frontend/                      React + TypeScript + Vite arayüz (Recharts grafi
 | Aşama | İçerik | Durum |
 |---|---|---|
 | Phase 1–2 | Mimari, backend, simülasyon, enerji modeli | ✅ |
-| Phase 3 | STM32 firmware + BLE (canlı ✅, geçmiş senkronizasyonu ⏳) | 🔄 |
+| Phase 3 | STM32 firmware ⏳ + BLE (canlı ✅, geçmiş senkronizasyonu ✅, donanım testi ⏳) | 🔄 |
 | Phase 4 | React + TypeScript arayüz (grafikler) | ✅ ilk sürüm |
 | Phase 5 | Kalibrasyon, yeterli veri olursa ML | ⏳ |
 | Phase 6 | Saha testi: önce 48 saat, sonra uzun süreli | ⏳ |

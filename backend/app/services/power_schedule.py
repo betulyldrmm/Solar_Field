@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from functools import lru_cache
 from zoneinfo import ZoneInfo
 
 from app.models.schemas import SystemConfig
@@ -58,6 +59,7 @@ def _bisect(a: datetime, b: datetime, lat: float, lon: float) -> datetime:
     return (a + (b - a) / 2).replace(microsecond=0)
 
 
+@lru_cache(maxsize=512)  # pure function of its arguments; called for every sample
 def sun_events(day: date, lat: float, lon: float, timezone: str) -> SunEvents:
     """Sunrise and sunset on the given LOCAL date."""
     tz = ZoneInfo(timezone)

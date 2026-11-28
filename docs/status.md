@@ -8,7 +8,7 @@ Tarih: 2026-11-26
 - Enerji integrasyonu, Isc → ışınım, gün tamlığı, üretim tahmini (iki yöntem)
 - FastAPI: 11 endpoint, token korumalı ayar değişikliği
 - Simülatör + canlı arka plan döngüsü, geçmiş veri üretme betiği
-- **67/67 pytest testi geçti, ruff temiz** (Python 3.13)
+- **83/83 pytest testi geçti, ruff temiz** (Python 3.13)
 
 ## Simülasyon olan
 - Tüm ölçüm verisi (`data_source=simulation`). Simülatörde referans panelin
@@ -31,4 +31,9 @@ Tarih: 2026-11-26
 
 ## Arayüz (Phase 4, ilk sürüm)
 - React + TypeScript + Vite + Recharts; 5 sekme. Simülasyon verisiyle uçtan uca denendi.
-- Eksik: UNO Q üzerinde backend'in `dist/` klasörünü servis etmesi, BLE ile alınan verinin arayüze bağlanması.
+- BLE ile alınan veri PC'deki backend (`SFS_DATA_DIR=data_ble`) üzerinden arayüzde görünür.
+- Eksik: UNO Q üzerinde backend'in `dist/` klasörünü servis etmesi.
+
+## BLE
+- Canlı paket + geçmiş senkronizasyonu (kayıp parçaları tekrar isteme, CRC32, kaldığı yerden devam) yazıldı ve sahte bağlantıyla test edildi.
+- DOĞRULAMA GEREKİYOR: UNO Q'da BlueZ GATT sunucu rolü, menzil, aktarım hızı.

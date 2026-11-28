@@ -10,3 +10,7 @@ data/*
 node_modules/
 dist/
 _to_delete/
+
+# local databases (backend run from backend/, BLE receiver)
+backend/data*/
+pc_receiver/received/
