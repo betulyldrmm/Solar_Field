@@ -38,23 +38,7 @@ sahada ölçülmüş veriye dayanan bir ön fizibilite.
 
 İstasyon bilgisayara **bağımlı değildir**: bağlantı yokken de ölçmeye ve kaydetmeye devam eder.
 
-## Donanım
 
-| Bölüm | Bileşen | Not |
-|---|---|---|
-| Kart | **Arduino UNO Q** | STM32U585 (gerçek zamanlı) + Qualcomm QRB2210 (Debian Linux), Wi-Fi 5, Bluetooth 5.1 |
-| Referans ölçüm | 12 V 150 mA küçük panel + **INA226** | Kısa devre akımı ölçülür (ışınımla doğrusal) |
-| Pil izleme | 2. INA226 | Pil gerilimi/akımı |
-| Sıcaklık | 3 × **DS18B20** | Panel, ortam, kutu |
-| Enerji | 20 W panel (17,5 V) → **CN3791 MPPT (12 V sürüm)** → **3S Li-ion** paket | Eski laptop pillerinden; 5 V için **buck** dönüştürücü |
-| Soğutma | **12 V 0,3 A fan** | 3S pakete doğrudan bağlı; STM32 lojik seviyeli MOSFET ile anahtarlar |
-| Ekran | 12864 (ST7920) LCD + enkoder + buton | Yalnızca basit değerler; 3D baskı kutu |
-| Saat | **DS3231** RTC (önerilen) | İnternetsiz zaman + gece uyanma alarmı |
-
-**Donanımda henüz doğrulanması gerekenler:** CN3791 çıkışının 12,6 V olması (pil
-bağlamadan önce ölçün), 5 V buck seçimi (≥ 3 A), lojik seviyeli MOSFET
-(IRFZ44N 3,3 V ile tam açılmaz → ör. IRLZ44N + fana ters diyot), gece
-kapatma/açma devresi (DS3231 alarmı → güç anahtarı). Liste: [`docs/status.md`](docs/status.md).
 
 ## Yazılım mimarisi
 
