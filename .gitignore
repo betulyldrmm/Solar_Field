@@ -9,3 +9,4 @@ data/*
 !data/samples/
 node_modules/
 dist/
+_to_delete/

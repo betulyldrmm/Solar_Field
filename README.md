@@ -70,6 +70,7 @@ f_T ölçülen panel sıcaklığından. Ayrıntı: [`docs/energy-model.md`](docs
 - Birkaç günlük veri yıllık üretimi temsil etmez.
 - Referans panel kalibre edilmeden sonuç ±%20+ hatalı olabilir.
 - UNO Q Bridge API'si ve RTC bağlantısı henüz donanımda doğrulanmadı.
+- BLE (canlı ölçüm, adım 1) yazıldı ama UNO Q'da denenmedi: [`docs/ble.md`](docs/ble.md).
 - Güç sistemi (CN3791, boost dönüştürücü, fan sürücüsü) tasarım kararı bekliyor.
 
 ## Yol haritası

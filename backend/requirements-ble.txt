@@ -1,0 +1,2 @@
+-r requirements.txt
+bless>=0.2.6
