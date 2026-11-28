@@ -8,9 +8,9 @@ gerçek güneş ışınımını ölçer ve kullanıcının planladığı sistemi
 o noktada **günde kaç kWh üreteceğini** tahmin eder. Amaç: katalog değeri yerine
 sahada ölçülmüş veriye dayanan bir ön fizibilite.
 
-> **Durum:** Backend + simülasyon tamam, **67 test geçiyor**. BLE canlı veri
-> aktarımı yazıldı (donanımda denenmedi). STM32 firmware ve React arayüzü
-> henüz yok. Ayrıntı: [`docs/status.md`](docs/status.md)
+> **Durum:** Backend + simülasyon tamam, **67 test geçiyor**. React arayüzü
+> çalışıyor (simülasyon verisiyle). BLE canlı veri aktarımı yazıldı (donanımda
+> denenmedi). STM32 firmware henüz yok. Ayrıntı: [`docs/status.md`](docs/status.md)
 
 ---
 
@@ -83,6 +83,14 @@ SFS_API_TOKEN=demo uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 Tarayıcıda <http://127.0.0.1:8000/docs> adresinden tüm endpoint'leri deneyebilirsin.
+
+**Arayüz (ikinci terminal, Node.js 18+):**
+```powershell
+cd frontend
+npm install
+npm run dev        # http://localhost:5173
+```
+Sekmeler: Genel bakış · Enerji · Üretim tahmini · Ayarlar · Olaylar. Ayrıntı: [`frontend/README.md`](frontend/README.md)
 Ayarlar ortam değişkenleriyle yapılır (`SFS_*`): örnek için [`.env.example`](.env.example).
 
 **Testler:**
@@ -162,7 +170,7 @@ backend/
 pc_receiver/                   bilgisayar tarafı BLE alıcısı (Bleak)
 docs/                          mimari, enerji modeli, kalibrasyon, API, BLE, durum
 firmware/                      STM32 (sonraki aşama)
-frontend/                      React arayüz (sonraki aşama)
+frontend/                      React + TypeScript + Vite arayüz (Recharts grafikleri)
 ```
 
 ## Yol haritası ve bilinen sınırlamalar
@@ -171,7 +179,7 @@ frontend/                      React arayüz (sonraki aşama)
 |---|---|---|
 | Phase 1–2 | Mimari, backend, simülasyon, enerji modeli | ✅ |
 | Phase 3 | STM32 firmware + BLE (canlı ✅, geçmiş senkronizasyonu ⏳) | 🔄 |
-| Phase 4 | React + TypeScript arayüz (grafikler) | ⏳ |
+| Phase 4 | React + TypeScript arayüz (grafikler) | ✅ ilk sürüm |
 | Phase 5 | Kalibrasyon, yeterli veri olursa ML | ⏳ |
 | Phase 6 | Saha testi: önce 48 saat, sonra uzun süreli | ⏳ |
 
