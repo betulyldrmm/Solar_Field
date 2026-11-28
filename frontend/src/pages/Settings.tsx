@@ -1,47 +1,5 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { api, type SystemConfig, type SystemConfigOut } from "../api";
-import { Card, ErrorBox } from "../components/ui";
-
-type Field = { key: keyof SystemConfig; label: string; step?: string; hint?: string };
-
-const GROUPS: { title: string; fields: Field[] }[] = [
-  {
-    title: "Ölçüm ve Kayıt Sıklığı",
-    fields: [{ key: "measurement_interval_s", label: "SQLite kayıt aralığı (sn)", step: "1", hint: "Canlı test için 5–10 sn, uzun saha görevi için 300 sn" }],
-  },
-  {
-    title: "Gece Kapanma Takvimi",
-    fields: [
-      { key: "shutdown_after_sunset_min", label: "Gün batımından sonra kapan (dk)", step: "1" },
-      { key: "wake_before_sunrise_min", label: "Gün doğumundan önce açıl (dk)", step: "1" },
-    ],
-  },
-  {
-    title: "12 V Soğutma Fanı (STM32 Yerel Kontrol)",
-    fields: [
-      { key: "fan_on_c", label: "Açılma sıcaklığı (°C)", step: "0.5" },
-      { key: "fan_off_c", label: "Kapanma sıcaklığı (°C)", step: "0.5", hint: "En az 2 °C histerezis gerekir" },
-    ],
-  },
-  {
-    title: "Planlanan Sistem Varsayılanları",
-    fields: [
-      { key: "panel_power_w", label: "Panel gücü (W)", step: "1" },
-      { key: "panel_count", label: "Panel sayısı", step: "1" },
-      { key: "performance_ratio", label: "Performans oranı", step: "0.01" },
-      { key: "temp_coefficient_pct_per_c", label: "Sıcaklık katsayısı (%/°C)", step: "0.01" },
-      { key: "tilt_deg", label: "Eğim (°)", step: "1" },
-      { key: "azimuth_deg", label: "Azimut (°)", step: "1" },
-    ],
-  },
-  {
-    title: "Referans Panel Kalibrasyonu",
-    fields: [
-      { key: "ref_isc_per_wm2_a", label: "k: Isc / ışınım (A per W/m²)", step: "any", hint: "Kalibrasyonla bulunur" },
-      { key: "ref_isc_temp_coeff_per_c", label: "Isc sıcaklık katsayısı (1/°C)", step: "any" },
-    ],
-  },
-];
+import { useEffect, useState, type FormEvent } from "react";
+import { api, type DataSource, type SystemConfig, type SystemConfigOut } from "../api";
 
 const TOKEN_KEY = "sfs_api_token";
 
@@ -56,9 +14,21 @@ function readToken(): string {
 export default function Settings({
   config,
   onSaved,
+  source,
+  onSourceChange,
+  refreshSec,
+  onRefreshSecChange,
+  theme,
+  onThemeChange,
 }: {
   config: SystemConfigOut | null;
   onSaved: (c: SystemConfigOut) => void;
+  source: DataSource;
+  onSourceChange: (s: DataSource) => void;
+  refreshSec: number;
+  onRefreshSecChange: (sec: number) => void;
+  theme: "light" | "dark";
+  onThemeChange: (t: "light" | "dark") => void;
 }) {
   const [draft, setDraft] = useState<SystemConfig | null>(null);
   const [token, setToken] = useState(readToken);
@@ -74,27 +44,16 @@ export default function Settings({
     }
   }, [config]);
 
-  if (!draft) return <Card><div className="empty">Ayarlar yükleniyor…</div></Card>;
+  if (!draft) {
+    return (
+      <section className="card">
+        <div className="empty">Ayarlar yükleniyor…</div>
+      </section>
+    );
+  }
 
   const set = <K extends keyof SystemConfig>(k: K, v: SystemConfig[K]) =>
     setDraft((d) => (d ? { ...d, [k]: v } : d));
-
-  async function applyQuickInterval(sec: number) {
-    if (!draft) return;
-    const next = { ...draft, measurement_interval_s: sec };
-    setDraft(next);
-    setBusy(true);
-    setMsg(null);
-    try {
-      const saved = await api.saveConfig(next, token);
-      onSaved(saved);
-      setMsg({ ok: true, text: `STM32 kayıt aralığı ${sec} saniye olarak güncellendi.` });
-    } catch (err) {
-      setMsg({ ok: false, text: err instanceof Error ? err.message : String(err) });
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function save(e: FormEvent) {
     e.preventDefault();
@@ -104,12 +63,12 @@ export default function Settings({
     try {
       sessionStorage.setItem(TOKEN_KEY, token);
     } catch {
-      /* storage unavailable */
+      /* ignore */
     }
     try {
       const saved = await api.saveConfig(draft, token);
       onSaved(saved);
-      setMsg({ ok: true, text: "Ayarlar kaydedildi ve STM32U585'e iletildi." });
+      setMsg({ ok: true, text: "Ayarlar kaydedildi." });
     } catch (err) {
       setMsg({ ok: false, text: err instanceof Error ? err.message : String(err) });
     } finally {
@@ -117,125 +76,158 @@ export default function Settings({
     }
   }
 
-  const row = (key: string, label: ReactNode, input: ReactNode, hint?: string) => (
-    <label key={key}>
-      {label}
-      {input}
-      {hint && <span className="hint">{hint}</span>}
-    </label>
-  );
-
   return (
     <form className="stack" onSubmit={save}>
-      <Card
-        title="Hızlı MCU Kayıt Sıklığı Seçimi"
-        subtitle="STM32U585'in veritabanına ve CSV'ye kaç saniyede bir ortalama kayıt göndereceğini tek dokunuşla seçin"
-      >
-        <div className="row-gap">
-          {[
-            { s: 5, label: "⚡ 5 sn (Canlı Masaüstü Test)" },
-            { s: 15, label: "🚀 15 sn (Hızlı Saha Kontrol)" },
-            { s: 60, label: "⏱️ 60 sn (Dakikalık)" },
-            { s: 300, label: "🔋 300 sn (5 dk Uzun Saha Modu)" },
-          ].map((p) => (
-            <button
-              key={p.s}
-              type="button"
-              className={draft.measurement_interval_s === p.s ? "primary" : "button"}
-              disabled={busy}
-              onClick={() => void applyQuickInterval(p.s)}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
-      </Card>
-
       <div className="grid-2">
-        {GROUPS.map((g) => (
-          <Card key={g.title} title={g.title}>
-            <div className="form">
-              {g.title === "Gece Kapanma Takvimi" &&
-                row(
-                  "night",
-                  "Gece kapanma açık",
-                  <select
-                    value={draft.night_shutdown_enabled ? "1" : "0"}
-                    onChange={(e) => set("night_shutdown_enabled", e.target.value === "1")}
-                  >
-                    <option value="1">Evet</option>
-                    <option value="0">Hayır (7/24 kesintisiz)</option>
-                  </select>,
-                )}
-              {g.title === "Referans Panel Kalibrasyonu" &&
-                row(
-                  "mode",
-                  "Ölçüm yöntemi",
-                  <select
-                    value={draft.reference_mode}
-                    onChange={(e) =>
-                      set("reference_mode", e.target.value as SystemConfig["reference_mode"])
-                    }
-                  >
-                    <option value="short_circuit">Kısa devre akımı (önerilen)</option>
-                    <option value="resistive_load">Yük direnci</option>
-                  </select>,
-                )}
-              {g.fields.map((f) =>
-                row(
-                  f.key,
-                  f.label,
-                  <input
-                    type="number"
-                    step={f.step ?? "any"}
-                    value={draft[f.key] as number}
-                    onChange={(e) => set(f.key, Number(e.target.value) as never)}
-                  />,
-                  f.hint,
-                ),
-              )}
-              {g.title === "Referans Panel Kalibrasyonu" &&
-                row(
-                  "cal",
-                  "Kalibre edildi mi?",
-                  <select
-                    value={draft.ref_calibrated ? "1" : "0"}
-                    onChange={(e) => set("ref_calibrated", e.target.value === "1")}
-                  >
-                    <option value="0">Hayır (etiket varsayımı)</option>
-                    <option value="1">Evet</option>
-                  </select>,
-                  "Yalnızca sahada kalibrasyon yapıldıysa Evet seçin",
-                )}
+        {/* ---- Ekran ve Görünüm Ayarları ---- */}
+        <section className="card">
+          <div className="card-head">
+            <div>
+              <h2>Ekran ve Okuma Ayarları</h2>
+              <p className="card-sub">Verilerin ekranda nasıl gösterileceğini seçin</p>
             </div>
-          </Card>
-        ))}
+          </div>
+
+          <div className="form">
+            <label>
+              Ekran Otomatik Yenileme Hızı
+              <select
+                value={String(refreshSec)}
+                onChange={(e) => onRefreshSecChange(Number(e.target.value))}
+              >
+                <option value="0">Kapalı — Sadece açıldığında ve tarih seçildiğinde oku (Önerilen)</option>
+                <option value="60">1 dakikada bir yenile</option>
+                <option value="300">5 dakikada bir yenile</option>
+                <option value="30">30 saniyede bir yenile</option>
+              </select>
+              <span className="hint">
+                İstasyon dağda 12 ay veri biriktirip Bluetooth ile okunduğu için sürekli yenilemeye gerek yoktur.
+              </span>
+            </label>
+
+            <label>
+              Gösterilen Veri Kaynağı
+              <select
+                value={source}
+                onChange={(e) => onSourceChange(e.target.value as DataSource)}
+              >
+                <option value="simulation">12 Aylık Örnek Saha Verisi (Simülasyon)</option>
+                <option value="hardware">Gerçek Sensör Kayıtları (Cihaz Donanımı)</option>
+              </select>
+            </label>
+
+            <label>
+              Görünüm Teması
+              <select
+                value={theme}
+                onChange={(e) => onThemeChange(e.target.value as "light" | "dark")}
+              >
+                <option value="light">Açık Tema (Sade Beyaz)</option>
+                <option value="dark">Koyu Tema</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        {/* ---- Güneş Paneli ve İstasyon Ayarları ---- */}
+        <section className="card">
+          <div className="card-head">
+            <div>
+              <h2>Güneş Paneli ve İstasyon Ayarları</h2>
+              <p className="card-sub">Hesaplanan Watt gücü ve cihazın saha kayıt sıklığı</p>
+            </div>
+          </div>
+
+          <div className="form">
+            <label>
+              İstasyon Veri Kayıt Sıklığı (Sahada Kaç Dakikada Bir Kaydetsin?)
+              <select
+                value={String(draft.measurement_interval_s)}
+                onChange={(e) => set("measurement_interval_s", Number(e.target.value))}
+              >
+                <option value="300">5 dakikada bir (12 ay saha kullanımı — Önerilen)</option>
+                <option value="900">15 dakikada bir</option>
+                <option value="1800">30 dakikada bir</option>
+                <option value="3600">1 saatte bir</option>
+                <option value="60">1 dakikada bir (Kısa süreli test)</option>
+              </select>
+            </label>
+
+            <label>
+              Tek Panelin Gücü (Watt)
+              <input
+                type="number"
+                step="5"
+                value={draft.panel_power_w}
+                onChange={(e) => set("panel_power_w", Number(e.target.value))}
+              />
+            </label>
+
+            <label>
+              Panel Sayısı (Adet)
+              <input
+                type="number"
+                step="1"
+                value={draft.panel_count}
+                onChange={(e) => set("panel_count", Number(e.target.value))}
+              />
+              <span className="hint">
+                Toplam sistem gücü: <b>{((draft.panel_power_w * draft.panel_count) / 1000).toFixed(2)} kW</b>
+              </span>
+            </label>
+
+            <label>
+              Soğutma Fanı Açılma Sıcaklığı (°C)
+              <input
+                type="number"
+                step="1"
+                value={draft.fan_on_c}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  setDraft((d) =>
+                    d ? { ...d, fan_on_c: v, fan_off_c: Math.min(d.fan_off_c, v - 3) } : d,
+                  );
+                }}
+              />
+            </label>
+
+            <label>
+              Gece Otomatik Uyku Modu
+              <select
+                value={draft.night_shutdown_enabled ? "1" : "0"}
+                onChange={(e) => set("night_shutdown_enabled", e.target.value === "1")}
+              >
+                <option value="1">Açık (Gece pil tasarrufu için uyur)</option>
+                <option value="0">Kapalı (24 saat açık kalır)</option>
+              </select>
+            </label>
+          </div>
+        </section>
       </div>
 
-      <Card title="Ayarları Uygula">
-        <div className="form inline">
-          {row(
-            "token",
-            "API anahtarı (SFS_API_TOKEN)",
+      <section className="card">
+        <div className="row-gap" style={{ justifyContent: "space-between" }}>
+          <label style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+            <span>Cihaz Şifresi:</span>
             <input
               type="password"
               value={token}
               onChange={(e) => setToken(e.target.value)}
-              autoComplete="off"
-            />,
-            "UNO Q varsayılan şifresi: vegas123",
-          )}
-          <button className="primary" disabled={busy}>
-            {busy ? "Kaydediliyor…" : "💾 Ayarları Kaydet & MCU'ya Gönder"}
+              style={{ width: 160 }}
+            />
+          </label>
+          <button type="submit" className="btn btn-primary" disabled={busy}>
+            {busy ? "Kaydediliyor…" : "💾 Ayarları Kaydet"}
           </button>
         </div>
-        {msg &&
-          (msg.ok ? (
-            <div className="alert alert-ok">✓ {msg.text}</div>
-          ) : (
-            <ErrorBox message={msg.text} />
-          ))}
-      </Card>
+
+        {msg && (
+          <div className={`alert ${msg.ok ? "alert-ok" : "alert-bad"}`} style={{ marginTop: 12 }}>
+            {msg.ok ? "✓ " : "⚠️ "}
+            {msg.text}
+          </div>
+        )}
+      </section>
     </form>
   );
 }

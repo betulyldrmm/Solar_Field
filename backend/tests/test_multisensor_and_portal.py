@@ -142,3 +142,9 @@ def test_export_csv_expands_extra_and_captive_portal_redirects(settings):
         live_sim = c.get("/api/live/telemetry?source=simulation&limit=10").json()
         assert live_sim["source"] == "simulation" and live_sim["count"] >= 1
         assert live_sim["latest"]["irradiance_wm2"] is not None
+
+        ov = c.get(
+            "/api/overview/range?start=2026-11-28T00:00:00Z&end=2026-11-28T23:59:59Z&source=hardware"
+        ).json()
+        assert ov["bucket"] == "hour" and ov["sample_count"] == 1
+        assert ov["summary"]["peak_power_w"] is not None

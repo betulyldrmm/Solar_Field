@@ -86,6 +86,34 @@ export interface LiveTelemetryResponse {
   series: LivePoint[];
 }
 
+export interface RangePoint {
+  key: string;
+  label: string;
+  power_w: number | null;
+  peak_power_w: number | null;
+  energy_kwh: number;
+  panel_temperature_c: number | null;
+  ambient_temperature_c: number | null;
+}
+
+export interface RangeOverviewResponse {
+  source: DataSource;
+  bucket: "hour" | "day" | "month";
+  start_utc: string;
+  end_utc: string;
+  sample_count: number;
+  installed_watts: number;
+  summary: {
+    total_energy_kwh: number;
+    avg_daylight_power_w: number | null;
+    peak_power_w: number | null;
+    avg_panel_temperature_c: number | null;
+    peak_panel_temperature_c: number | null;
+    avg_ambient_temperature_c: number | null;
+  };
+  points: RangePoint[];
+}
+
 export interface MeasurementPage {
   items: Measurement[];
   total: number;
@@ -252,6 +280,18 @@ export const api = {
   bluetoothInfo: () => request<BluetoothInfo>("/bluetooth/info"),
   liveTelemetry: (source?: DataSource, limit = 120) =>
     request<LiveTelemetryResponse>(withSource(`/live/telemetry?limit=${limit}`, source)),
+  rangeOverview: (
+    startIso: string,
+    endIso: string,
+    bucket: "auto" | "hour" | "day" | "month" = "auto",
+    source?: DataSource,
+  ) =>
+    request<RangeOverviewResponse>(
+      withSource(
+        `/overview/range?start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(endIso)}&bucket=${bucket}`,
+        source,
+      ),
+    ),
   deviceStatus: (source?: DataSource) => request<DeviceStatus>(withSource("/device/status", source)),
   latest: (source?: DataSource) => request<Measurement>(withSource("/measurements/latest", source)),
   history: (startIso: string, limit = 5000, source?: DataSource) =>
@@ -278,9 +318,13 @@ export const api = {
       body: JSON.stringify(cfg),
     }),
   events: (limit = 100) => request<EventsResponse>(`/events?limit=${limit}`),
-  csvUrl: (startIso?: string, source?: DataSource) =>
+  csvUrl: (startIso?: string, source?: DataSource, endIso?: string) =>
     withSource(
-      `${BASE}/measurements/export.csv${startIso ? `?start=${encodeURIComponent(startIso)}` : ""}`,
+      `${BASE}/measurements/export.csv${
+        startIso
+          ? `?start=${encodeURIComponent(startIso)}${endIso ? `&end=${encodeURIComponent(endIso)}` : ""}`
+          : ""
+      }`,
       source,
     ),
   jsonUrl: (startIso?: string, source?: DataSource) =>

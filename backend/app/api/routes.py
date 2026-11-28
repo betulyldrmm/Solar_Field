@@ -33,6 +33,7 @@ from app.models.schemas import (
 from app.services.battery_monitor import battery_status
 from app.services.energy_calculator import EstimateUnavailable, daily_energy, estimate_production
 from app.services.power_schedule import is_scheduled_on, next_transitions
+from app.services.range_overview import BucketMode, build_range_overview
 from app.storage.csv_logger import to_csv_text
 from app.storage.database import Database
 
@@ -199,6 +200,31 @@ def latest(db: DbDep, settings: SettingsDep, source: DataSource | None = None) -
     if m is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No measurement recorded yet")
     return m
+
+
+@router.get("/overview/range")
+def overview_range(
+    db: DbDep,
+    settings: SettingsDep,
+    start: datetime,
+    end: datetime,
+    bucket: BucketMode = "auto",
+    source: DataSource | None = None,
+) -> dict[str, Any]:
+    """Smooth aggregated Watt & Temperature curve for any calendar date range."""
+    _check_range(start, end)
+    src = _active_source(settings, source)
+    cfg = db.load_config()
+    rows = db.query_measurements(start=start, end=end, source=src)
+    return build_range_overview(
+        rows,
+        cfg,
+        start_utc=start,
+        end_utc=end,
+        timezone=settings.timezone,
+        bucket=bucket,
+        source=src,
+    )
 
 
 @router.get("/measurements/history", response_model=MeasurementPage)

@@ -1,14 +1,9 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Area,
   AreaChart,
-  Brush,
   CartesianGrid,
-  ComposedChart,
   Legend,
-  Line,
-  LineChart,
-  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -16,537 +11,564 @@ import {
 } from "recharts";
 import {
   api,
-  type BluetoothInfo,
   type DataSource,
-  type LiveTelemetryResponse,
-  type Measurement,
+  type DeviceStatus,
+  type RangeOverviewResponse,
   type SystemConfigOut,
 } from "../api";
-import { Card, Empty, ErrorBox, RadialGauge, Stat } from "../components/ui";
-import { age, dateTime, num, STATUS_LABEL, time, timeSec } from "../format";
-import { usePolling } from "../usePolling";
+import { num } from "../format";
 
-const RANGES = [
-  { label: "15 dk", hours: 0.25 },
-  { label: "1 saat", hours: 1 },
-  { label: "6 saat", hours: 6 },
-  { label: "24 saat", hours: 24 },
-  { label: "3 gün", hours: 72 },
-  { label: "7 gün", hours: 168 },
+type PeriodMode = "day" | "week" | "month" | "year" | "custom";
+
+const MONTHS_FULL = [
+  "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
+  "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık",
 ];
+const DOW_SHORT = ["Pzt", "Sal", "Çar", "Per", "Cum", "Cmt", "Paz"];
 
-const LIVE_CHANNELS = [
-  { key: "socTemp", label: "UNO Q SoC (°C)", color: "#38bdf8" },
-  { key: "wlanTemp", label: "Wi-Fi/BT Isı (°C)", color: "#a78bfa" },
-  { key: "panelTemp", label: "Panel (°C)", color: "#fb7185" },
-  { key: "heatsinkTemp", label: "Soğutucu (°C)", color: "#f59e0b" },
-  { key: "ambientTemp", label: "Ortam (°C)", color: "#10b981" },
-  { key: "irradiance", label: "Işınım (W/m²)", color: "#eab308" },
-  { key: "cpuPct", label: "CPU Yükü (%)", color: "#f472b6" },
-  { key: "adcA0", label: "ADC A0 (V)", color: "#2dd4bf" },
-] as const;
+function toLocalDateStr(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
 
-function calcIrradiance(m: Measurement, cfg: SystemConfigOut | null): number | null {
-  if (m.irradiance_measured_wm2 !== null && m.irradiance_measured_wm2 !== undefined) {
-    return m.irradiance_measured_wm2;
-  }
-  if (!cfg || m.current_a === null || cfg.reference_mode !== "short_circuit") return null;
-  const t = m.panel_temperature_c ?? 25;
-  const denom = cfg.ref_isc_per_wm2_a * (1 + cfg.ref_isc_temp_coeff_per_c * (t - 25));
-  return denom > 0 ? Math.max(0, m.current_a / denom) : null;
+function parseLocalDate(ymd: string): Date {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(y, m - 1, d, 0, 0, 0, 0);
+}
+
+function addDays(d: Date, days: number): Date {
+  const next = new Date(d);
+  next.setDate(next.getDate() + days);
+  return next;
 }
 
 export default function Overview({
   config,
   source,
-  btInfo,
-  live,
+  refreshSec,
 }: {
   config: SystemConfigOut | null;
   source: DataSource;
-  btInfo: BluetoothInfo | null;
-  live: LiveTelemetryResponse | null;
+  refreshSec: number;
 }) {
-  const [hours, setHours] = useState(24);
-  const [enabledLive, setEnabledLive] = useState<Record<string, boolean>>({
-    socTemp: true,
-    wlanTemp: true,
-    panelTemp: true,
-    heatsinkTemp: true,
-    ambientTemp: false,
-    irradiance: source === "simulation",
-    cpuPct: true,
-    adcA0: true,
-  });
+  const [mode, setMode] = useState<PeriodMode>("day");
+  const [anchor, setAnchor] = useState<Date>(() => new Date());
+  const [calMonth, setCalMonth] = useState<Date>(() => new Date());
+  const [showCalendar, setShowCalendar] = useState<boolean>(false);
 
-  const status = usePolling(() => api.deviceStatus(source), 5_000, [source]);
-  const latest = usePolling(() => api.latest(source), 5_000, [source]);
-  const history = usePolling(
-    () => api.history(new Date(Date.now() - hours * 3600_000).toISOString(), 5000, source),
-    8_000,
-    [hours, source],
-  );
+  const [customStart, setCustomStart] = useState<string>(() => toLocalDateStr(addDays(new Date(), -6)));
+  const [customEnd, setCustomEnd] = useState<string>(() => toLocalDateStr(new Date()));
+  const [rangeClickStage, setRangeClickStage] = useState<"start" | "end">("start");
 
-  const lp = live?.latest ?? null;
-  const liveSeries = useMemo(() => {
-    return (live?.series ?? []).map((p) => ({
-      t: new Date(p.timestamp_utc).getTime(),
-      socTemp: p.mpu_temperature_c,
-      wlanTemp: p.thermal_zones?.["wlan-thermal"] ?? null,
-      panelTemp: p.panel_temperature_c,
-      heatsinkTemp: p.heatsink_temperature_c,
-      ambientTemp: p.ambient_temperature_c,
-      irradiance: p.irradiance_wm2,
-      cpuPct: p.cpu_pct,
-      adcA0: typeof p.adc_mv?.adc_a0_mv === "number" ? Number((p.adc_mv.adc_a0_mv / 1000).toFixed(3)) : null,
-    }));
-  }, [live]);
+  const [data, setData] = useState<RangeOverviewResponse | null>(null);
+  const [status, setStatus] = useState<DeviceStatus | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [err, setErr] = useState<string | null>(null);
 
-  const rows = useMemo(() => {
-    const maxGapMs = 3 * (config?.measurement_interval_s ?? 300) * 1000;
-    const out: Record<string, number | null>[] = [];
-    let prev: number | null = null;
-    for (const m of history.data?.items ?? []) {
-      const t = new Date(m.timestamp_utc).getTime();
-      if (prev !== null && t - prev > maxGapMs) {
-        out.push({
-          t: prev + 1,
-          irradiance: null,
-          current_ma: null,
-          power_mw: null,
-          voltage: null,
-          panel: null,
-          ambient: null,
-          case_: null,
-          heatsink: null,
-          mpu: null,
-          battery_v: null,
-          battery_i: null,
-        });
-      }
-      out.push({
-        t,
-        irradiance: calcIrradiance(m, config),
-        current_ma: m.current_a !== null ? Number((m.current_a * 1000).toFixed(2)) : null,
-        power_mw: m.power_w !== null ? Number((m.power_w * 1000).toFixed(3)) : null,
-        voltage: m.voltage_v,
-        panel: m.panel_temperature_c,
-        ambient: m.ambient_temperature_c,
-        case_: m.case_temperature_c,
-        heatsink: m.heatsink_temperature_c,
-        mpu: m.mpu_temperature_c,
-        battery_v: m.battery_voltage_v,
-        battery_i: m.battery_current_a,
-      });
-      prev = t;
+  // Seçilen mod ve tarihe göre [start, end] aralığını hesapla
+  const { startDate, endDate, periodTitle, bucket } = useMemo(() => {
+    if (mode === "day") {
+      const s = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate(), 0, 0, 0);
+      const e = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate(), 23, 59, 59);
+      return {
+        startDate: s,
+        endDate: e,
+        periodTitle: `${s.getDate()} ${MONTHS_FULL[s.getMonth()]} ${s.getFullYear()}`,
+        bucket: "hour" as const,
+      };
     }
-    return out;
-  }, [history.data, config]);
+    if (mode === "week") {
+      const e = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate(), 23, 59, 59);
+      const s = addDays(new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate(), 0, 0, 0), -6);
+      return {
+        startDate: s,
+        endDate: e,
+        periodTitle: `${s.getDate()} ${MONTHS_FULL[s.getMonth()]} – ${e.getDate()} ${MONTHS_FULL[e.getMonth()]}`,
+        bucket: "day" as const,
+      };
+    }
+    if (mode === "month") {
+      const s = new Date(anchor.getFullYear(), anchor.getMonth(), 1, 0, 0, 0);
+      const e = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0, 23, 59, 59);
+      return {
+        startDate: s,
+        endDate: e,
+        periodTitle: `${MONTHS_FULL[s.getMonth()]} ${s.getFullYear()}`,
+        bucket: "day" as const,
+      };
+    }
+    if (mode === "year") {
+      const e = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0, 23, 59, 59);
+      const s = new Date(anchor.getFullYear() - 1, anchor.getMonth() + 1, 1, 0, 0, 0);
+      return {
+        startDate: s,
+        endDate: e,
+        periodTitle: `${MONTHS_FULL[s.getMonth()]} ${s.getFullYear()} – ${MONTHS_FULL[e.getMonth()]} ${e.getFullYear()}`,
+        bucket: "month" as const,
+      };
+    }
+    const s = parseLocalDate(customStart);
+    const eRaw = parseLocalDate(customEnd);
+    const e = eRaw >= s
+      ? new Date(eRaw.getFullYear(), eRaw.getMonth(), eRaw.getDate(), 23, 59, 59)
+      : new Date(s.getFullYear(), s.getMonth(), s.getDate(), 23, 59, 59);
+    return {
+      startDate: s,
+      endDate: e,
+      periodTitle: `${toLocalDateStr(s)} → ${toLocalDateStr(e)}`,
+      bucket: "auto" as const,
+    };
+  }, [mode, anchor, customStart, customEnd]);
 
-  const s = status.data;
-  const m = latest.data;
-  const gLive = lp?.irradiance_wm2 ?? (m ? calcIrradiance(m, config) : null);
-  const mainTemp = lp?.panel_temperature_c ?? lp?.mpu_temperature_c ?? m?.mpu_temperature_c ?? null;
-  const mainTempTitle =
-    lp?.panel_temperature_c !== null && lp?.panel_temperature_c !== undefined
-      ? "Panel Isısı"
-      : "UNO Q SoC Isısı";
-  const soc = lp?.battery_soc_pct ?? s?.battery.soc_pct_estimated ?? null;
-  const battV = lp?.battery_voltage_v ?? s?.battery.voltage_v ?? null;
-  const powerMw =
-    lp?.power_w !== null && lp?.power_w !== undefined
-      ? lp.power_w * 1000
-      : m?.power_w !== null && m?.power_w !== undefined
-        ? m.power_w * 1000
-        : null;
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const [ov, st] = await Promise.all([
+        api.rangeOverview(startDate.toISOString(), endDate.toISOString(), bucket, source),
+        api.deviceStatus(source),
+      ]);
+      setData(ov);
+      setStatus(st);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [startDate, endDate, bucket, source]);
 
-  const tone =
-    s?.device_status === "online"
-      ? "ok"
-      : s?.device_status === "sleeping"
-        ? "muted"
-        : s?.device_status === "stale"
-          ? "warn"
-          : "bad";
+  useEffect(() => {
+    void loadData();
+    if (refreshSec > 0) {
+      const id = window.setInterval(() => void loadData(), refreshSec * 1000);
+      return () => window.clearInterval(id);
+    }
+    return undefined;
+  }, [loadData, refreshSec]);
 
-  function toggleChannel(key: string) {
-    setEnabledLive((prev) => ({ ...prev, [key]: !prev[key] }));
+  function stepPeriod(dir: -1 | 1) {
+    setAnchor((prev) => {
+      const d = new Date(prev);
+      if (mode === "day") d.setDate(d.getDate() + dir);
+      else if (mode === "week") d.setDate(d.getDate() + dir * 7);
+      else if (mode === "month") d.setMonth(d.getMonth() + dir);
+      else d.setFullYear(d.getFullYear() + dir);
+      setCalMonth(new Date(d.getFullYear(), d.getMonth(), 1));
+      return d;
+    });
   }
+
+  // Görsel mini takvim hücreleri
+  const calendarCells = useMemo(() => {
+    const y = calMonth.getFullYear();
+    const m = calMonth.getMonth();
+    const first = new Date(y, m, 1);
+    const startOffset = (first.getDay() + 6) % 7; // Pazartesi = 0
+    const daysInMonth = new Date(y, m + 1, 0).getDate();
+    const cells: { date: Date | null; ymd: string }[] = [];
+    for (let i = 0; i < startOffset; i++) cells.push({ date: null, ymd: `pad_${i}` });
+    for (let day = 1; day <= daysInMonth; day++) {
+      const d = new Date(y, m, day);
+      cells.push({ date: d, ymd: toLocalDateStr(d) });
+    }
+    return cells;
+  }, [calMonth]);
+
+  function onCalendarDayClick(d: Date) {
+    const ymd = toLocalDateStr(d);
+    if (mode === "custom") {
+      if (rangeClickStage === "start") {
+        setCustomStart(ymd);
+        if (ymd > customEnd) setCustomEnd(ymd);
+        setRangeClickStage("end");
+      } else {
+        if (ymd < customStart) {
+          setCustomStart(ymd);
+        } else {
+          setCustomEnd(ymd);
+        }
+        setRangeClickStage("start");
+      }
+    } else {
+      setAnchor(d);
+      setMode("day");
+    }
+  }
+
+  const startYmd = toLocalDateStr(startDate);
+  const endYmd = toLocalDateStr(endDate);
+  const points = data?.points ?? [];
+  const sum = data?.summary;
+  const soc = status?.battery.soc_pct_estimated ?? null;
 
   return (
     <div className="stack">
-      <ErrorBox message={status.error} />
-
-      {/* ---- Row 1: 4 Animated Radial Arc Gauges ---- */}
-      <div className="grid-gauges">
-        <RadialGauge
-          label="Anlık Güneş Işınımı"
-          value={gLive}
-          min={0}
-          max={1100}
-          unit="W/m²"
-          digits={0}
-          color="#f59e0b"
-          badge={<span className="badge warn">{config?.ref_calibrated ? "Kalibreli" : "Tahmini"}</span>}
-          sub={
-            gLive !== null
-              ? `Akım: ${num((lp?.current_a ?? m?.current_a ?? 0) * 1000, 1, "mA")}`
-              : "INA226 (0x40) bekleniyor"
-          }
-        />
-
-        <RadialGauge
-          label={mainTempTitle}
-          value={mainTemp}
-          min={0}
-          max={85}
-          unit="°C"
-          digits={1}
-          color={mainTemp !== null && mainTemp > 45 ? "#fb7185" : "#38bdf8"}
-          badge={<span className="badge ok">Canlı Isı</span>}
-          sub={`Ortam: ${num(lp?.ambient_temperature_c ?? m?.ambient_temperature_c, 1, "°C")} · Fan: ${
-            (lp?.fan_state ?? s?.fan_state) ? "AÇIK" : "KAPALI"
-          }`}
-        />
-
-        <RadialGauge
-          label="3S Li-Ion Pil Paketi"
-          value={soc}
-          min={0}
-          max={100}
-          unit="% SoC"
-          digits={0}
-          color={soc !== null && soc < 25 ? "#ef4444" : "#10b981"}
-          badge={<span className="badge">{num(battV, 2, "V")}</span>}
-          sub={`Akım: ${num(lp?.battery_current_a ?? m?.battery_current_a, 2, "A")} · Pil Isısı: ${num(
-            lp?.battery_temperature_c ?? m?.battery_temperature_c,
-            1,
-            "°C",
-          )}`}
-        />
-
-        <RadialGauge
-          label={powerMw !== null ? "Referans Panel Gücü" : "UNO Q İşlemci Yükü"}
-          value={powerMw !== null ? powerMw : (lp?.cpu_pct ?? 0)}
-          min={0}
-          max={powerMw !== null ? 50 : 100}
-          unit={powerMw !== null ? "mW" : "% CPU"}
-          digits={1}
-          color="#a78bfa"
-          badge={<span className="badge kind-assumed">{source === "hardware" ? "MCU+MPU" : "Sim"}</span>}
-          sub={
-            powerMw !== null
-              ? `Gerilim: ${num((lp?.voltage_v ?? 0) * 1000, 1, "mV")}`
-              : `RAM: %${num(lp?.mem_pct, 0)} (${num(lp?.mem_used_mb, 0, "MB")})`
-          }
-        />
-      </div>
-
-      {/* ---- Row 2: 6 KPI Cards with Embedded Sparklines ---- */}
-      <div className="grid-stats">
-        <Stat
-          label="İstasyon Durumu"
-          tone={tone}
-          value={s ? STATUS_LABEL[s.device_status] : "…"}
-          sub={s ? `Son DB kaydı ${age(s.age_s)} · Toplam ${s.measurements_total}` : undefined}
-        />
-        <Stat
-          label="SoC Çekirdek Isısı"
-          value={num(lp?.mpu_temperature_c, 2, "°C")}
-          spark={liveSeries.slice(-30).map((r) => r.socTemp)}
-          color="#38bdf8"
-          sub={`Wi-Fi/BT modülü: ${num(lp?.thermal_zones?.["wlan-thermal"], 1, "°C")}`}
-        />
-        <Stat
-          label="ADC A0 Girişi (Canlı)"
-          value={
-            typeof lp?.adc_mv?.adc_a0_mv === "number"
-              ? num(lp.adc_mv.adc_a0_mv, 0, "mV")
-              : "—"
-          }
-          spark={liveSeries.slice(-30).map((r) => r.adcA0)}
-          color="#2dd4bf"
-          sub={`A1: ${num(lp?.adc_mv?.adc_a1_mv, 0, "mV")} · A2: ${num(lp?.adc_mv?.adc_a2_mv, 0, "mV")}`}
-        />
-        <Stat
-          label="Nem & Basınç"
-          value={num(lp?.humidity_pct ?? m?.humidity_pct, 1, "%")}
-          spark={rows.slice(-30).map((r) => r.panel)}
-          color="#10b981"
-          sub={`Basınç: ${num(lp?.pressure_hpa ?? m?.pressure_hpa, 1, "hPa")}`}
-        />
-        <Stat
-          label="Bluetooth Ağ (PAN)"
-          tone="ok"
-          value={btInfo?.connected_peers.length ? `${btInfo.connected_peers.length} Cihaz` : "Hazır"}
-          sub={`Adres: http://${btInfo?.pan_ip ?? "10.44.0.1"}/`}
-        />
-        <Stat
-          label="Gece Uyku Takvimi"
-          value={s?.scheduled_on ? `Kapanış ${time(s.next_shutdown_utc)}` : `Açılış ${time(s?.next_wake_utc)}`}
-          sub={s?.scheduled_on ? `Açılış: ${dateTime(s.next_wake_utc)}` : "Planlı gece uykusu"}
-        />
-      </div>
-
-      {/* ---- Row 3: High-Speed 1.5s Real-Time Oscilloscope ---- */}
-      <Card
-        title="Canlı Çok Kanallı Osiloskop (1.5 sn Gerçek Zamanlı Akış)"
-        subtitle="STM32U585 MCU + Qualcomm QRB2210 sensörlerinden gelen canlı dalga formu (veritabanını şişirmeden bellekte akar)"
-      >
-        <div className="pill-bar">
-          {LIVE_CHANNELS.map((ch) => (
-            <button
-              key={ch.key}
-              type="button"
-              className={`channel-pill ${enabledLive[ch.key] ? "on" : ""}`}
-              style={{ color: enabledLive[ch.key] ? ch.color : undefined }}
-              onClick={() => toggleChannel(ch.key)}
-            >
-              <span className="channel-swatch" style={{ background: ch.color }} />
-              {ch.label}
-            </button>
-          ))}
-        </div>
-
-        {liveSeries.length === 0 ? (
-          <Empty>Canlı akış başlatılıyor…</Empty>
-        ) : (
-          <ResponsiveContainer width="100%" height={290}>
-            <AreaChart data={liveSeries} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
-              <defs>
-                {LIVE_CHANNELS.map((ch) => (
-                  <linearGradient key={ch.key} id={`grad_${ch.key}`} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={ch.color} stopOpacity={0.28} />
-                    <stop offset="95%" stopColor={ch.color} stopOpacity={0.0} />
-                  </linearGradient>
-                ))}
-              </defs>
-              <CartesianGrid stroke="var(--grid)" strokeDasharray="3 3" vertical={false} />
-              <XAxis
-                dataKey="t"
-                type="number"
-                scale="time"
-                domain={["dataMin", "dataMax"]}
-                tickFormatter={(v: number) => timeSec(new Date(v).toISOString())}
-                stroke="var(--muted-ink)"
-                fontSize={11}
-              />
-              <YAxis stroke="var(--muted-ink)" fontSize={11} width={46} domain={["auto", "auto"]} />
-              <Tooltip
-                labelFormatter={(v: number) => timeSec(new Date(v).toISOString())}
-                formatter={(v: number) => num(v, 2)}
-                contentStyle={{
-                  background: "var(--panel)",
-                  border: "1px solid var(--line)",
-                  borderRadius: 10,
-                }}
-              />
-              <Legend />
-              {LIVE_CHANNELS.filter((ch) => enabledLive[ch.key]).map((ch) => (
-                <Area
-                  key={ch.key}
-                  type="monotone"
-                  dataKey={ch.key}
-                  name={ch.label}
-                  stroke={ch.color}
-                  fill={`url(#grad_${ch.key})`}
-                  strokeWidth={2.2}
-                  dot={false}
-                  isAnimationActive={false}
-                  connectNulls
-                />
-              ))}
-            </AreaChart>
-          </ResponsiveContainer>
-        )}
-      </Card>
-
-      {/* ---- Row 4: Historical Time-Range Selector + Zoomable Solar/Current Chart ---- */}
-      <Card
-        title="Tarihsel Işınım & Referans Akım Grafiği (Yakınlaştırma Kaydırıcılı)"
-        subtitle="SQLite veritabanına kaydedilen doğrulanmış ölçümler — alttaki çubuktan istediğiniz saat aralığına yakınlaşın"
-        actions={
-          <div className="seg">
-            {RANGES.map((r) => (
+      {/* ---- 1. TAKVİM VE DÖNEM SEÇİCİ ---- */}
+      <section className="card">
+        <div className="period-bar">
+          <div className="period-tabs">
+            {(
+              [
+                { id: "day", label: "Günlük" },
+                { id: "week", label: "Haftalık" },
+                { id: "month", label: "Aylık" },
+                { id: "year", label: "Yıllık (12 Ay)" },
+                { id: "custom", label: "Tarih Aralığı Seç" },
+              ] as const
+            ).map((t) => (
               <button
-                key={r.label}
+                key={t.id}
                 type="button"
-                className={r.hours === hours ? "active" : ""}
-                onClick={() => setHours(r.hours)}
+                className={mode === t.id ? "active" : ""}
+                onClick={() => {
+                  setMode(t.id);
+                  if (t.id === "custom") setShowCalendar(true);
+                }}
               >
-                {r.label}
+                {t.label}
               </button>
             ))}
           </div>
-        }
-      >
-        {rows.length === 0 ? (
-          <Empty>
-            {history.loading
-              ? "Yükleniyor…"
-              : "Seçilen aralıkta kayıtlı ölçüm yok (Simülasyon sekmesinden 6 günlük örnek veriyi inceleyebilirsiniz)."}
-          </Empty>
+
+          <div className="row-gap">
+            {mode !== "custom" && (
+              <div className="date-stepper">
+                <button type="button" onClick={() => stepPeriod(-1)} title="Önceki">
+                  ◀
+                </button>
+                <span className="date-stepper-label">{periodTitle}</span>
+                <button type="button" onClick={() => stepPeriod(1)} title="Sonraki">
+                  ▶
+                </button>
+              </div>
+            )}
+
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setShowCalendar((v) => !v)}
+            >
+              📅 {showCalendar ? "Takvimi Kapat" : "Takvim"}
+            </button>
+
+            <a
+              className="btn btn-primary"
+              href={api.csvUrl(startDate.toISOString(), source, endDate.toISOString())}
+              download
+            >
+              ⬇ Veriyi İndir (CSV)
+            </a>
+          </div>
+        </div>
+
+        {showCalendar && (
+          <div className="calendar-drawer">
+            <div className="mini-cal">
+              <div className="mini-cal-head">
+                <button
+                  type="button"
+                  onClick={() => setCalMonth(new Date(calMonth.getFullYear(), calMonth.getMonth() - 1, 1))}
+                >
+                  ◀
+                </button>
+                <span>
+                  {MONTHS_FULL[calMonth.getMonth()]} {calMonth.getFullYear()}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCalMonth(new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 1))}
+                >
+                  ▶
+                </button>
+              </div>
+              <div className="mini-cal-grid">
+                {DOW_SHORT.map((d) => (
+                  <div key={d} className="mini-cal-dow">
+                    {d}
+                  </div>
+                ))}
+                {calendarCells.map((c) => {
+                  if (!c.date) return <div key={c.ymd} className="mini-cal-day muted-day" />;
+                  const isEdge = c.ymd === startYmd || c.ymd === endYmd;
+                  const inRange = c.ymd >= startYmd && c.ymd <= endYmd;
+                  return (
+                    <button
+                      key={c.ymd}
+                      type="button"
+                      className={`mini-cal-day ${isEdge ? "selected" : inRange ? "in-range" : ""}`}
+                      onClick={() => c.date && onCalendarDayClick(c.date)}
+                    >
+                      {c.date.getDate()}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="range-inputs">
+              <h3>İstediğiniz Tarih Aralığını Seçin</h3>
+              <p className="card-sub">
+                Takvimden bir güne tıklayabilir veya aşağıdan başlangıç ve bitiş tarihini seçerek o günlerin elektrik üretimini görebilirsiniz.
+              </p>
+              <div className="range-row">
+                <label>
+                  Başlangıç Tarihi
+                  <input
+                    type="date"
+                    value={mode === "custom" ? customStart : startYmd}
+                    onChange={(e) => {
+                      setMode("custom");
+                      setCustomStart(e.target.value);
+                    }}
+                  />
+                </label>
+                <label>
+                  Bitiş Tarihi
+                  <input
+                    type="date"
+                    value={mode === "custom" ? customEnd : endYmd}
+                    onChange={(e) => {
+                      setMode("custom");
+                      setCustomEnd(e.target.value);
+                    }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => {
+                    const now = new Date();
+                    setAnchor(now);
+                    setCalMonth(new Date(now.getFullYear(), now.getMonth(), 1));
+                    setMode("day");
+                  }}
+                >
+                  Bugüne Git
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {err && <div className="alert alert-bad">⚠️ {err}</div>}
+
+      {/* ---- 2. SADE ÖZET KUTULARI (TEK BAKIŞTA ANLAŞILIR) ---- */}
+      <div className="summary-grid">
+        <div className="big-stat">
+          <div className="big-stat-title">⚡ En Yüksek Elektrik Gücü</div>
+          <div className="big-stat-value" style={{ color: "var(--sun-dark)" }}>
+            {num(sum?.peak_power_w, 0, "W")}
+          </div>
+          <div className="big-stat-sub">
+            Gündüz ortalaması: <b>{num(sum?.avg_daylight_power_w, 0, "W")}</b>
+          </div>
+        </div>
+
+        <div className="big-stat">
+          <div className="big-stat-title">🔋 Toplam Üretilen Elektrik</div>
+          <div className="big-stat-value" style={{ color: "var(--leaf)" }}>
+            {num(sum?.total_energy_kwh, 1, "kWh")}
+          </div>
+          <div className="big-stat-sub">
+            {config
+              ? `${config.panel_count} adet × ${config.panel_power_w} W panel için`
+              : "Seçilen tarih aralığı toplamı"}
+          </div>
+        </div>
+
+        <div className="big-stat">
+          <div className="big-stat-title">🌡️ Panel Sıcaklığı</div>
+          <div className="big-stat-value" style={{ color: "var(--hot)" }}>
+            {num(sum?.avg_panel_temperature_c, 1, "°C")}
+          </div>
+          <div className="big-stat-sub">
+            En yüksek: <b>{num(sum?.peak_panel_temperature_c, 1, "°C")}</b> · Hava:{" "}
+            <b>{num(sum?.avg_ambient_temperature_c, 1, "°C")}</b>
+          </div>
+        </div>
+
+        <div className="big-stat">
+          <div className="big-stat-title">🔌 İstasyon Pil Durumu</div>
+          <div className="big-stat-value">
+            {soc === null ? "—" : `%${Math.round(soc)}`}
+          </div>
+          <div className="big-stat-sub">
+            {num(status?.battery.voltage_v, 2, "V")} · {data?.sample_count ?? 0} ölçüm kaydı okundu
+          </div>
+        </div>
+      </div>
+
+      {/* ---- 3. GRAFİK 1: ALINAN ELEKTRİK GÜCÜ (PÜRÜZSÜZ PARABOL) ---- */}
+      <section className="card">
+        <div className="card-head">
+          <div>
+            <h2>Alınan Elektrik Gücü (Watt) — {periodTitle}</h2>
+            <p className="card-sub">
+              {data?.bucket === "hour"
+                ? "Sabah gün doğumundan öğle zirvesine ve akşam gün batımına saatlik üretim eğrisi"
+                : data?.bucket === "month"
+                  ? "Aylara göre mevsimsel ortalama gündüz elektrik gücü eğrisi"
+                  : "Seçilen günlerde alınan ortalama elektrik gücü eğrisi"}
+            </p>
+          </div>
+        </div>
+
+        {points.length === 0 || data?.sample_count === 0 ? (
+          <div className="empty">
+            {loading
+              ? "Veriler okunuyor…"
+              : "Seçilen tarih aralığında kayıtlı güneş verisi bulunamadı."}
+          </div>
         ) : (
-          <ResponsiveContainer width="100%" height={310}>
-            <ComposedChart data={rows} margin={{ top: 10, right: 16, left: 0, bottom: 4 }}>
+          <ResponsiveContainer width="100%" height={300}>
+            <AreaChart data={points} margin={{ top: 10, right: 18, left: 0, bottom: 4 }}>
               <defs>
-                <linearGradient id="irrGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.4} />
-                  <stop offset="95%" stopColor="#f59e0b" stopOpacity={0.0} />
+                <linearGradient id="wattSmoothGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.42} />
+                  <stop offset="95%" stopColor="#f59e0b" stopOpacity={0.02} />
                 </linearGradient>
               </defs>
               <CartesianGrid stroke="var(--grid)" vertical={false} />
-              <XAxis
-                dataKey="t"
-                type="number"
-                scale="time"
-                domain={["dataMin", "dataMax"]}
-                tickFormatter={(v: number) => time(new Date(v).toISOString())}
+              <XAxis dataKey="label" stroke="var(--muted-ink)" fontSize={12} tickMargin={8} />
+              <YAxis
                 stroke="var(--muted-ink)"
-                fontSize={11}
+                fontSize={12}
+                width={58}
+                tickFormatter={(v: number) => `${Math.round(v)} W`}
               />
-              <YAxis yAxisId="left" stroke="#f59e0b" fontSize={11} width={48} />
-              <YAxis yAxisId="right" orientation="right" stroke="#38bdf8" fontSize={11} width={48} />
               <Tooltip
-                labelFormatter={(v: number) => dateTime(new Date(v).toISOString())}
-                formatter={(v: number) => num(v, 2)}
-                contentStyle={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 10 }}
+                formatter={(v: number) => [num(v, 0, "Watt"), "Alınan Güç"]}
+                contentStyle={{
+                  background: "var(--panel)",
+                  border: "1px solid var(--line)",
+                  borderRadius: 12,
+                }}
+              />
+              <Area
+                type="monotone"
+                dataKey="power_w"
+                name="Elektrik Gücü (Watt)"
+                stroke="#f59e0b"
+                strokeWidth={3}
+                fill="url(#wattSmoothGrad)"
+                dot={false}
+                connectNulls
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        )}
+      </section>
+
+      {/* ---- 4. GRAFİK 2: PANEL VE HAVA SICAKLIĞI (°C — PÜRÜZSÜZ EĞRİ) ---- */}
+      <section className="card">
+        <div className="card-head">
+          <div>
+            <h2>Panel Sıcaklığı (°C) — {periodTitle}</h2>
+            <p className="card-sub">
+              Güneş altında panelin ve dış ortam havasının sıcaklık değişimi
+            </p>
+          </div>
+        </div>
+
+        {points.length === 0 || data?.sample_count === 0 ? (
+          <div className="empty">Sıcaklık verisi bulunamadı.</div>
+        ) : (
+          <ResponsiveContainer width="100%" height={280}>
+            <AreaChart data={points} margin={{ top: 10, right: 18, left: 0, bottom: 4 }}>
+              <defs>
+                <linearGradient id="tempPanelGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#ef4444" stopOpacity={0.28} />
+                  <stop offset="95%" stopColor="#ef4444" stopOpacity={0.0} />
+                </linearGradient>
+                <linearGradient id="tempAmbGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.2} />
+                  <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0.0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke="var(--grid)" vertical={false} />
+              <XAxis dataKey="label" stroke="var(--muted-ink)" fontSize={12} tickMargin={8} />
+              <YAxis
+                stroke="var(--muted-ink)"
+                fontSize={12}
+                width={52}
+                tickFormatter={(v: number) => `${Math.round(v)}°C`}
+              />
+              <Tooltip
+                formatter={(v: number, name: string) => [num(v, 1, "°C"), name]}
+                contentStyle={{
+                  background: "var(--panel)",
+                  border: "1px solid var(--line)",
+                  borderRadius: 12,
+                }}
               />
               <Legend />
               <Area
-                yAxisId="left"
                 type="monotone"
-                dataKey="irradiance"
-                name="Işınım (W/m²)"
-                stroke="#f59e0b"
-                fill="url(#irrGrad)"
-                strokeWidth={2}
-                connectNulls={false}
-                isAnimationActive={false}
-              />
-              <Line
-                yAxisId="right"
-                type="monotone"
-                dataKey="current_ma"
-                name="Kısa Devre Akımı (mA)"
-                stroke="#38bdf8"
+                dataKey="panel_temperature_c"
+                name="Panel Sıcaklığı (°C)"
+                stroke="#ef4444"
+                strokeWidth={3}
+                fill="url(#tempPanelGrad)"
                 dot={false}
-                strokeWidth={2}
-                connectNulls={false}
-                isAnimationActive={false}
+                connectNulls
               />
-              {rows.length > 15 && (
-                <Brush
-                  dataKey="t"
-                  height={24}
-                  stroke="var(--sun)"
-                  fill="var(--panel-elev)"
-                  tickFormatter={(v: number) => time(new Date(v).toISOString())}
-                />
-              )}
-            </ComposedChart>
+              <Area
+                type="monotone"
+                dataKey="ambient_temperature_c"
+                name="Hava Sıcaklığı (°C)"
+                stroke="#0ea5e9"
+                strokeWidth={2.2}
+                fill="url(#tempAmbGrad)"
+                dot={false}
+                connectNulls
+              />
+            </AreaChart>
           </ResponsiveContainer>
         )}
-      </Card>
+      </section>
 
-      {/* ---- Row 5: Dual Historical Thermal + Battery/Power Charts ---- */}
-      <div className="grid-2">
-        <Card
-          title="Kayıtlı Sıcaklık Geçmişi (°C)"
-          subtitle="Panel, ortam, kutu, soğutucu ve işlemci sıcaklık eğrileri + fan eşiği"
-        >
-          {rows.length === 0 ? (
-            <Empty>Veri yok</Empty>
-          ) : (
-            <ResponsiveContainer width="100%" height={260}>
-              <LineChart data={rows} margin={{ top: 8, right: 14, left: 0, bottom: 0 }}>
-                <CartesianGrid stroke="var(--grid)" vertical={false} />
-                <XAxis
-                  dataKey="t"
-                  type="number"
-                  scale="time"
-                  domain={["dataMin", "dataMax"]}
-                  tickFormatter={(v: number) => time(new Date(v).toISOString())}
-                  stroke="var(--muted-ink)"
-                  fontSize={11}
-                />
-                <YAxis stroke="var(--muted-ink)" fontSize={11} width={44} />
-                <Tooltip
-                  labelFormatter={(v: number) => dateTime(new Date(v).toISOString())}
-                  formatter={(v: number) => num(v, 1, "°C")}
-                  contentStyle={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 10 }}
-                />
-                <Legend />
-                {config && (
-                  <ReferenceLine
-                    y={config.fan_on_c}
-                    stroke="#ef4444"
-                    strokeDasharray="4 4"
-                    label={{ value: `Fan ${config.fan_on_c}°C`, fill: "#ef4444", fontSize: 10 }}
-                  />
-                )}
-                <Line dataKey="panel" name="Panel" stroke="#fb7185" dot={false} strokeWidth={2} connectNulls={false} isAnimationActive={false} />
-                <Line dataKey="heatsink" name="Soğutucu" stroke="#f59e0b" dot={false} strokeWidth={2} connectNulls={false} isAnimationActive={false} />
-                <Line dataKey="case_" name="Kutu" stroke="#a78bfa" dot={false} strokeWidth={2} connectNulls={false} isAnimationActive={false} />
-                <Line dataKey="ambient" name="Ortam" stroke="#10b981" dot={false} strokeWidth={2} connectNulls={false} isAnimationActive={false} />
-                <Line dataKey="mpu" name="UNO Q SoC" stroke="#38bdf8" dot={false} strokeWidth={2} connectNulls={false} isAnimationActive={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          )}
-        </Card>
-
-        <Card
-          title="3S Pil Gerilimi (V) & Akımı (A)"
-          subtitle="Şarj / deşarj dengesi ve 9.0–12.6 V çalışma bandı"
-        >
-          {rows.length === 0 ? (
-            <Empty>Veri yok</Empty>
-          ) : (
-            <ResponsiveContainer width="100%" height={260}>
-              <ComposedChart data={rows} margin={{ top: 8, right: 14, left: 0, bottom: 0 }}>
-                <CartesianGrid stroke="var(--grid)" vertical={false} />
-                <XAxis
-                  dataKey="t"
-                  type="number"
-                  scale="time"
-                  domain={["dataMin", "dataMax"]}
-                  tickFormatter={(v: number) => time(new Date(v).toISOString())}
-                  stroke="var(--muted-ink)"
-                  fontSize={11}
-                />
-                <YAxis yAxisId="v" domain={[9, 12.8]} stroke="#10b981" fontSize={11} width={42} />
-                <YAxis yAxisId="i" orientation="right" stroke="#f59e0b" fontSize={11} width={42} />
-                <Tooltip
-                  labelFormatter={(v: number) => dateTime(new Date(v).toISOString())}
-                  formatter={(v: number) => num(v, 2)}
-                  contentStyle={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 10 }}
-                />
-                <Legend />
-                <Line
-                  yAxisId="v"
-                  dataKey="battery_v"
-                  name="Pil Gerilimi (V)"
-                  stroke="#10b981"
-                  dot={false}
-                  strokeWidth={2.2}
-                  connectNulls={false}
-                  isAnimationActive={false}
-                />
-                <Line
-                  yAxisId="i"
-                  dataKey="battery_i"
-                  name="Pil Akımı (A)"
-                  stroke="#f59e0b"
-                  dot={false}
-                  strokeWidth={1.8}
-                  connectNulls={false}
-                  isAnimationActive={false}
-                />
-              </ComposedChart>
-            </ResponsiveContainer>
-          )}
-        </Card>
-      </div>
+      {/* ---- 5. SADE DÖNEM TABLOSU ---- */}
+      {points.length > 0 && (data?.sample_count ?? 0) > 0 && (
+        <section className="card">
+          <div className="card-head">
+            <div>
+              <h2>Seçilen Dönem Özeti</h2>
+              <p className="card-sub">Her zaman dilimi için ortalama güç, tepe güç, üretilen enerji ve sıcaklık</p>
+            </div>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Zaman</th>
+                  <th>Ortalama Güç</th>
+                  <th>En Yüksek Güç</th>
+                  <th>Üretilen Elektrik</th>
+                  <th>Panel Sıcaklığı</th>
+                  <th>Hava Sıcaklığı</th>
+                </tr>
+              </thead>
+              <tbody>
+                {points
+                  .filter((p) => p.power_w !== null || p.panel_temperature_c !== null)
+                  .map((p) => (
+                    <tr key={p.key}>
+                      <td><b>{p.label}</b></td>
+                      <td>{num(p.power_w, 0, "W")}</td>
+                      <td>{num(p.peak_power_w, 0, "W")}</td>
+                      <td>{num(p.energy_kwh, 2, "kWh")}</td>
+                      <td>{num(p.panel_temperature_c, 1, "°C")}</td>
+                      <td>{num(p.ambient_temperature_c, 1, "°C")}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
     </div>
   );
 }
