@@ -49,10 +49,10 @@ class Settings:
     longitude_deg: float = 27.225
     timezone: str = "Europe/Istanbul"
     # Battery pack topology: 1 for 1S (3.0-4.2 V), 3 for 3S (9.0-12.6 V).
-    battery_series_cells: int = 1
+    battery_series_cells: int = 3
     # Storage safety
     min_free_disk_mb: int = 200
-    csv_fsync_every: int = 12  # fsync CSV every N rows (~1 min at 5 s)
+    csv_fsync_every: int = 1  # fsync every row: at 5 min/row nothing may be lost on power cut
 
     @property
     def db_path(self) -> Path:

@@ -114,7 +114,7 @@ async def serve(source: LatestSource, interval_s: float) -> None:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Solar Field Station BLE peripheral")
     p.add_argument("--demo", action="store_true", help="use a built-in simulator instead of the DB")
-    p.add_argument("--interval", type=float, default=5.0, help="seconds between checks")
+    p.add_argument("--interval", type=float, default=30.0, help="seconds between DB checks")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,

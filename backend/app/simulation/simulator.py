@@ -8,7 +8,10 @@ Magnitudes are kept physically plausible:
 * reference panel Isc ∝ irradiance; the "true" panel factor differs from the
   nameplate on purpose (calibration is needed, as in reality);
 * panel temperature via NOCT model, ambient with a daily cycle;
-* 1S/3S Li-ion pack: charged by a 20 W panel, drained by ~2.7 W load;
+* 3S Li-ion pack (default): charged by a 20 W panel, drained by ~2.7 W base
+  load plus the 12 V fan (3.6 W at 12 V, scales with pack voltage²);
+* night shutdown: `power_off()` / `power_on()` model a powered-down station
+  (no load, no data; a new boot_id and sequence after every wake-up);
 * occasional DS18B20 disconnects and dropped messages.
 """
 
@@ -25,7 +28,8 @@ from app.services.solar_position import sun_elevation_deg
 NAMEPLATE_ISC_A = 0.150
 TRUE_ISC_FACTOR = 0.93  # real panel delivers 93 % of nameplate -> calibration matters
 NOCT_C = 45.0
-LOAD_W = 2.7
+LOAD_W = 2.7  # UNO Q + sensors + LCD via 5 V buck (assumption)
+FAN_W_AT_12V = 12.0 * 0.3  # 12 V 0.3 A fan, driven straight from the 3S pack
 CHARGE_PANEL_W = 20.0
 CHARGE_EFF = 0.75
 PACK_CAPACITY_WH_PER_CELL = 3.7 * 3.0  # ~11 Wh per (aged) parallel group cell
@@ -53,7 +57,7 @@ class Simulator:
         *,
         latitude_deg: float,
         longitude_deg: float,
-        series_cells: int = 1,
+        series_cells: int = 3,
         parallel_cells: int = 6,
         fan_on_c: float = 40.0,
         fan_off_c: float = 35.0,
@@ -70,12 +74,32 @@ class Simulator:
         self.rng = random.Random(seed)
         self.fault_rate = fault_rate
         self.drop_rate = drop_rate
-        self.boot_id = f"sim{self.rng.randrange(16**5):05x}"
+        self.boot_id = self._new_boot_id()
+        self.uptime_ms = 0
+        self.powered = True
         self.sequence = 0
         self.cloud = 0.8
         self.soc = 70.0
         self.fan = False
         self._last: datetime | None = None
+
+    def _new_boot_id(self) -> str:
+        return f"sim{self.rng.randrange(16**5):05x}"
+
+    def power_off(self, when: datetime) -> None:
+        """Station switched off (night). No load is drawn while off."""
+        self.powered = False
+        self.fan = False
+        self._last = when
+
+    def power_on(self, when: datetime) -> None:
+        """Wake-up = STM32 reboot: new boot_id, sequence restarts."""
+        if not self.powered:
+            self.powered = True
+            self.boot_id = self._new_boot_id()
+            self.sequence = 0
+            self.uptime_ms = 0
+            self._last = when
 
     def _ambient(self, when: datetime) -> float:
         month = when.month
@@ -86,9 +110,12 @@ class Simulator:
 
     def sample(self, when: datetime) -> dict | None:
         """Returns a raw message, or None when the message is 'dropped'."""
+        if not self.powered:
+            raise RuntimeError("sample() while powered off; call power_on() first")
         dt_s = 5.0 if self._last is None else max(0.0, (when - self._last).total_seconds())
         self._last = when
         self.sequence += 1
+        self.uptime_ms += int(dt_s * 1000)
 
         # cloud random walk, mean-reverting toward 0.75
         steps = max(1, int(dt_s / 5))
@@ -112,7 +139,9 @@ class Simulator:
         v = isc * SHUNT_PLUS_WIRING_OHM
 
         charge_w = CHARGE_PANEL_W * g / 1000.0 * CHARGE_EFF
-        load_w = LOAD_W + (3.6 if self.fan else 0.0)
+        pack_v = self.series * _ocv(self.soc)
+        fan_w = FAN_W_AT_12V * (pack_v / 12.0) ** 2 if self.fan else 0.0
+        load_w = LOAD_W + fan_w
         self.soc += (charge_w - load_w) * dt_s / 3600.0 / self.capacity_wh * 100.0
         self.soc = max(0.0, min(100.0, self.soc))
         batt_i = (charge_w - load_w) / (3.7 * self.series)
@@ -137,7 +166,7 @@ class Simulator:
             "schema_version": SCHEMA_VERSION,
             "boot_id": self.boot_id,
             "sequence": self.sequence,
-            "uptime_ms": self.sequence * 5000,
+            "uptime_ms": self.uptime_ms,
             "voltage_v": round(v, 4),
             "current_a": round(isc, 5),
             "power_w": round(v * isc, 6),

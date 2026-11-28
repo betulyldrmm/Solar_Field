@@ -7,7 +7,7 @@ Tarih parametreleri saat dilimi içermeli (`2026-11-26T00:00:00Z`), yoksa 422.
 | Metot | Yol | Açıklama | Hata kodları |
 |---|---|---|---|
 | GET | `/health` | `status`, `db_ok`, sürüm | – |
-| GET | `/device/status` | online/stale/offline, son ölçüm yaşı, sensör durumları, fan, pil (gerilimden **tahmini** SoC) | – |
+| GET | `/device/status` | online/stale/offline/**sleeping** (planlı gece kapanması), `scheduled_on`, `next_shutdown_utc`, `next_wake_utc`, son ölçüm yaşı, sensör durumları, fan, pil (gerilimden **tahmini** SoC) | – |
 | GET | `/measurements/latest` | Son ölçüm | 404 veri yok |
 | GET | `/measurements/history?start&end&limit&offset&order` | Sayfalı geçmiş (`limit` ≤ 5000) | 422 |
 | GET | `/measurements/export.csv?start&end` | CSV indirme | 413 > 200k satır, 422 |

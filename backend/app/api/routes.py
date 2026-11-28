@@ -28,6 +28,7 @@ from app.models.schemas import (
 )
 from app.services.battery_monitor import battery_status
 from app.services.energy_calculator import EstimateUnavailable, daily_energy, estimate_production
+from app.services.power_schedule import is_scheduled_on, next_transitions
 from app.storage.csv_logger import to_csv_text
 from app.storage.database import Database
 
@@ -93,6 +94,12 @@ def device_status(request: Request, db: DbDep, settings: SettingsDep) -> DeviceS
     else:
         age = (datetime.now(UTC) - last.timestamp_utc).total_seconds()
         state = "online" if age <= stale_after else ("stale" if age <= 10 * stale_after else "offline")
+    now = datetime.now(UTC)
+    args = (cfg, settings.latitude_deg, settings.longitude_deg, settings.timezone)
+    scheduled_on = is_scheduled_on(now, *args)
+    next_shutdown, next_wake = next_transitions(now, *args)
+    if not scheduled_on and state != "online":
+        state = "sleeping"  # planned night shutdown, not a fault
     bridge = "simulator" if settings.data_mode == "simulation" else (
         "connected" if state == "online" else "no_data")
     return DeviceStatus(
@@ -106,6 +113,9 @@ def device_status(request: Request, db: DbDep, settings: SettingsDep) -> DeviceS
         battery=battery_status(last.battery_voltage_v if last else None,
                                last.battery_current_a if last else None,
                                settings.battery_series_cells),
+        scheduled_on=scheduled_on,
+        next_shutdown_utc=next_shutdown,
+        next_wake_utc=next_wake,
         bridge=bridge,
         measurements_total=db.count_measurements(source=settings.data_mode),
     )

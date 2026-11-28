@@ -20,6 +20,7 @@ import asyncio
 import contextlib
 import json
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from app.models.schemas import SystemConfig
@@ -54,6 +55,7 @@ class HardwareBridgeAdapter:
                 "measurement_interval_s": cfg.measurement_interval_s,
                 "fan_on_c": cfg.fan_on_c,
                 "fan_off_c": cfg.fan_off_c,
+                "night_shutdown_enabled": cfg.night_shutdown_enabled,
             },
             separators=(",", ":"),
         )
@@ -62,14 +64,25 @@ class HardwareBridgeAdapter:
 class SimulationRunner:
     """Feeds the simulator into the ingest pipeline at the configured interval."""
 
-    def __init__(self, simulator: Simulator, ingest: IngestService, interval_s: float):
+    def __init__(
+        self,
+        simulator: Simulator,
+        ingest: IngestService,
+        interval_s: float,
+        is_on: Callable[[datetime], bool] | None = None,
+    ):
         self.simulator = simulator
         self.ingest = ingest
         self.interval_s = interval_s
+        self.is_on = is_on or (lambda _when: True)  # night-shutdown schedule
         self._task: asyncio.Task[None] | None = None
 
     def step(self, when: datetime | None = None) -> bool:
         when = when or datetime.now(UTC)
+        if not self.is_on(when):
+            self.simulator.power_off(when)  # station is off at night -> no data
+            return False
+        self.simulator.power_on(when)
         msg = self.simulator.sample(when)
         if msg is None:
             return False

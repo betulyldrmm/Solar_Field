@@ -73,7 +73,8 @@ def test_seeded_data_flows_through_api(settings):
         latest = c.get("/api/measurements/latest").json()
         assert latest["data_source"] == "simulation"
         page = c.get("/api/measurements/history?limit=10&order=desc").json()
-        assert page["total"] > 3000 and len(page["items"]) == 10
+        # night shutdown: only daylight (+30 min margins) rows exist -> ~1500 rows at 60 s over 2.2 days
+        assert page["total"] > 1000 and len(page["items"]) == 10
         daily = c.get("/api/energy/daily?days=3").json()
         assert len(daily) >= 2 and all(d["data_source"] == "simulation" for d in daily)
         csv_text = c.get("/api/measurements/export.csv").text

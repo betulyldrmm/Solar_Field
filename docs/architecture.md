@@ -17,7 +17,13 @@ STM32U585 (Arduino C++)                 Linux (Qualcomm, Python)
   Bridge **aynı** `IngestService.ingest()` yolunu kullanır.
 * Her satır `data_source` (`simulation` | `hardware`) taşır. API yalnızca
   `SFS_DATA_MODE` ile eşleşen satırları gösterir — iki kaynak asla karışmaz.
-* Fan kontrolü STM32'de yereldir: Linux/Bridge çökse bile çalışır.
+* Fan kontrolü STM32'de yereldir: Linux/Bridge çökse bile çalışır. 12 V fan 3S
+  pakete doğrudan bağlıdır, STM32 lojik seviyeli MOSFET ile anahtarlar.
+* **Kayıt aralığı 5 dk** (`measurement_interval_s=300`): STM32 kısa aralıklarla
+  ölçer, 5 dk'lık ortalamayı tek mesaj olarak gönderir (anlık bulut gölgesi kaçmasın).
+* **Gece kapanma:** `app/services/power_schedule.py` gün doğumu/batımını hesaplar;
+  istasyon gün batımı + 30 dk kapanır, gün doğumu − 30 dk açılır. Her açılış
+  STM32 için yeni `boot_id` demektir. Gece boşluğu gün tamlığını bozmaz.
 
 ## STM32 → Linux mesajı (schema v1)
 
@@ -69,8 +75,8 @@ Sepetteki **DS1302** yerine **DS3231** önerilir (I²C, ±2 ppm, alarm çıkış
 | Hatalı sensör | Doğrulayıcı → alan `null` + `sensor_errors` |
 | Zaman sorunu | `clock_unsynced` bayrağı |
 
-Depolama: UNO Q'nun dahili eMMC'si yeterli (5 sn'de bir ölçüm ≈ 20 MB/yıl
-SQLite). Ayrı microSD modülü **gerekli değil**; ancak veriyi cihazdan sökerek
+Depolama: UNO Q'nun dahili eMMC'si fazlasıyla yeterli (5 dakikada bir kayıt,
+yalnızca gündüz → yılda ~1 MB SQLite). Her CSV satırı `fsync` edilir. Ayrı microSD modülü **gerekli değil**; ancak veriyi cihazdan sökerek
 almak isteniyorsa opsiyonel.
 
 ## Kaynak tüketimi

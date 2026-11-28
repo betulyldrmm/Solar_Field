@@ -8,7 +8,7 @@ Tarih: 2026-11-26
 - Enerji integrasyonu, Isc → ışınım, gün tamlığı, üretim tahmini (iki yöntem)
 - FastAPI: 11 endpoint, token korumalı ayar değişikliği
 - Simülatör + canlı arka plan döngüsü, geçmiş veri üretme betiği
-- **52/52 pytest testi geçti, ruff temiz** (Python 3.13)
+- **67/67 pytest testi geçti, ruff temiz** (Python 3.13)
 
 ## Simülasyon olan
 - Tüm ölçüm verisi (`data_source=simulation`). Simülatörde referans panelin
@@ -17,13 +17,14 @@ Tarih: 2026-11-26
 ## Donanım doğrulaması bekleyen
 | Konu | Durum |
 |---|---|
-| CN3791 çıkış gerilimi (4,2 V mı 12,6 V mı) | **Pil bağlanmadan önce ölçülmeli** |
-| 1S → 5 V güç yolu (XL6009 datasheet min. 5 V giriş) | Tasarım kararı bekliyor |
-| Fan MOSFET (IRFZ44N lojik seviyeli değil) | Lojik seviyeli MOSFET gerekli |
+| CN3791 çıkışı 3S için 12,6 V olmalı (12 V sürüm) | **Pil bağlanmadan önce ölçülmeli** |
+| 3S (9–12,6 V) → 5 V güç yolu | **Karar: 3S.** XL6009 boost gerekmez; 12,6 V → 5 V **buck** (UNO Q için ≥ 3 A) seçilmeli |
+| 12 V fan sürücüsü | **Karar: fan 3S pakete doğrudan bağlı** (9–12,6 V'ta çalışır). IRFZ44N 3,3 V ile tam açılmaz → lojik seviyeli MOSFET (ör. IRLZ44N) + fana ters diyot (1N400x) |
 | UNO Q Bridge API (App Lab) | DOĞRULAMA GEREKİYOR — `bridge_service.py` |
 | DS3231'in Linux'a mı STM32'ye mi bağlanacağı | DOĞRULAMA GEREKİYOR |
 | Referans panel kısa devre bağlantısı, INA226 şönt | DOĞRULAMA GEREKİYOR |
-| Enerji bütçesi (kışın 7/24 yetmiyor) | Gece kapatma veya daha büyük panel/pil |
+| Enerji bütçesi | **Karar: gece kapanma** (gün batımı +30 dk kapanır, gün doğumu −30 dk açılır). Kodda takvim hazır; kapatma/açma devresi (DS3231 alarmı → güç anahtarı) DOĞRULAMA GEREKİYOR |
+| Kayıt aralığı | **Karar: 5 dakikada bir kayıt.** STM32 bu sürede sık örnekleyip **ortalamayı** göndermeli (firmware) |
 
 ## Henüz başlanmayan
 - Phase 3: STM32 firmware · Phase 4: React arayüz · ML altyapısı · systemd servisi

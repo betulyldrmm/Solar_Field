@@ -69,9 +69,16 @@ class SystemConfig(BaseModel):
     )
     ref_isc_temp_coeff_per_c: float = Field(0.0005, ge=0, le=0.002)
     # Acquisition / thermal
-    measurement_interval_s: int = Field(5, ge=1, le=3600)
+    measurement_interval_s: int = Field(
+        300, ge=1, le=3600,
+        description="Seconds between STORED measurements (STM32 averages its fast samples over this window)",
+    )
     fan_on_c: float = Field(40.0, ge=25, le=70)
     fan_off_c: float = Field(35.0, ge=20, le=68)
+    # Night shutdown (see app/services/power_schedule.py)
+    night_shutdown_enabled: bool = True
+    shutdown_after_sunset_min: int = Field(30, ge=0, le=180)
+    wake_before_sunrise_min: int = Field(30, ge=0, le=180)
 
     @model_validator(mode="after")
     def _check_fan_hysteresis(self) -> SystemConfig:
@@ -160,7 +167,7 @@ class BatteryStatus(BaseModel):
 
 
 class DeviceStatus(BaseModel):
-    device_status: Literal["online", "stale", "offline"]
+    device_status: Literal["online", "stale", "offline", "sleeping"]
     data_mode: DataSource
     last_measurement_utc: datetime | None
     age_s: float | None
@@ -168,6 +175,9 @@ class DeviceStatus(BaseModel):
     sensor_states: dict[str, str]
     fan_state: bool | None
     battery: BatteryStatus
+    scheduled_on: bool = True
+    next_shutdown_utc: datetime | None = None
+    next_wake_utc: datetime | None = None
     bridge: str
     measurements_total: int
 

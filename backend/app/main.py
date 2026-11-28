@@ -17,6 +17,7 @@ from app.api.routes import router
 from app.config import APP_VERSION, Settings
 from app.services.bridge_service import HardwareBridgeAdapter, SimulationRunner
 from app.services.ingest import IngestService
+from app.services.power_schedule import is_scheduled_on
 from app.simulation.simulator import Simulator
 from app.storage.csv_logger import CsvLogger
 from app.storage.database import Database
@@ -44,7 +45,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             sim = Simulator(latitude_deg=settings.latitude_deg, longitude_deg=settings.longitude_deg,
                             series_cells=settings.battery_series_cells, fan_on_c=cfg.fan_on_c,
                             fan_off_c=cfg.fan_off_c, seed=settings.simulator_seed)
-            runner = SimulationRunner(sim, ingest, cfg.measurement_interval_s)
+            def _is_on(when):  # simulated station follows the night-shutdown schedule
+                return is_scheduled_on(when, db.load_config(), settings.latitude_deg,
+                                       settings.longitude_deg, settings.timezone)
+
+            runner = SimulationRunner(sim, ingest, cfg.measurement_interval_s, is_on=_is_on)
             runner.start()
 
             def _on_change(new_cfg):  # keep simulator in sync with edited config
