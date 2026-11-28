@@ -10,6 +10,7 @@ Rules:
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -28,13 +29,43 @@ FIELD_RULES: dict[str, tuple[str, float, float]] = {
     "power_w": ("ina_ref", -0.5, 50.0),
     "battery_voltage_v": ("ina_batt", 0.0, 36.0),
     "battery_current_a": ("ina_batt", -10.0, 10.0),
-    "panel_temperature_c": ("t_panel", -40.0, 100.0),
+    "panel_temperature_c": ("t_panel", -40.0, 120.0),
     "ambient_temperature_c": ("t_ambient", -40.0, 70.0),
     "case_temperature_c": ("t_case", -40.0, 100.0),
+    "heatsink_temperature_c": ("t_heatsink", -40.0, 125.0),
+    "battery_temperature_c": ("t_battery", -40.0, 90.0),
+    "mcu_temperature_c": ("t_mcu", -40.0, 125.0),
+    "mpu_temperature_c": ("t_mpu", -40.0, 125.0),
+    "surface_temperature_c": ("t_surface", -70.0, 380.0),
+    "humidity_pct": ("env_humidity", 0.0, 100.0),
+    "pressure_hpa": ("env_pressure", 300.0, 1150.0),
+    "wind_speed_ms": ("wind", 0.0, 75.0),
+    "irradiance_measured_wm2": ("irradiance_sensor", 0.0, 1600.0),
 }
-TEMP_FIELDS = {"panel_temperature_c", "ambient_temperature_c", "case_temperature_c"}
+# Fields typically backed by DS18B20 1-Wire probes (reject both -127 and 85.0 reset sentinel)
+DS18B20_FIELDS = {
+    "panel_temperature_c",
+    "ambient_temperature_c",
+    "case_temperature_c",
+    "heatsink_temperature_c",
+    "battery_temperature_c",
+}
+TEMP_FIELDS = DS18B20_FIELDS | {"mcu_temperature_c", "mpu_temperature_c", "surface_temperature_c"}
 OK_STATES = {"OK"}
 EARLIEST_VALID_TIME = datetime(2025, 1, 1, tzinfo=UTC)
+_EXTRA_KEY_RE = re.compile(r"^[a-zA-Z0-9_.-]{1,48}$")
+_EXTRA_SUFFIXES = ("_c", "_v", "_a", "_w", "_pct", "_hpa", "_lux", "_wm2", "_ms", "_ohm", "_rpm", "_hz")
+_KNOWN_TOP_KEYS = {
+    "schema_version",
+    "boot_id",
+    "sequence",
+    "uptime_ms",
+    "fan_state",
+    "sensor_status",
+    "sensors",
+    "extra_sensors",
+    *FIELD_RULES,
+}
 
 
 class MessageRejected(ValueError):
@@ -101,13 +132,51 @@ def validate_message(
             if val == DS18B20_DISCONNECTED_C:
                 issues.append(SensorIssue(sensor, f"{name}: DS18B20 disconnected (-127)"))
                 val = None
-            elif val == DS18B20_POWER_ON_RESET_C:
+            elif name in DS18B20_FIELDS and val == DS18B20_POWER_ON_RESET_C:
                 issues.append(SensorIssue(sensor, f"{name}: DS18B20 power-on value 85.0"))
                 val = None
         if val is not None and not (lo <= val <= hi):
             issues.append(SensorIssue(sensor, f"{name}: {val} out of range [{lo}, {hi}]"))
             val = None
         values[name] = val
+
+    extra_candidates: dict[str, Any] = {}
+    raw_extra = raw.get("extra_sensors")
+    if isinstance(raw_extra, dict):
+        extra_candidates.update(raw_extra)
+    for k, v_raw in raw.items():
+        if k not in _KNOWN_TOP_KEYS and k.endswith(_EXTRA_SUFFIXES):
+            extra_candidates.setdefault(k, v_raw)
+
+    extra_sensors: dict[str, float] = {}
+    for k_raw, v_raw in list(extra_candidates.items())[:64]:
+        k = str(k_raw).strip()
+        if not _EXTRA_KEY_RE.match(k):
+            issues.append(SensorIssue("extra_sensors", f"invalid sensor key {k!r}"))
+            continue
+        state = sensor_states.get(k, "OK")
+        if state not in OK_STATES:
+            if v_raw is not None or state != "NOT_INSTALLED":
+                issues.append(SensorIssue(k, f"{k}: sensor state {state}"))
+            continue
+        if v_raw is None:
+            continue
+        val = _as_float(v_raw)
+        if val is None:
+            issues.append(SensorIssue(k, f"{k}: not a finite number"))
+            continue
+        is_temp = k.endswith("_c") or k.startswith(("temp_", "t_", "ds18b20_", "heat_"))
+        if is_temp:
+            if val == DS18B20_DISCONNECTED_C:
+                issues.append(SensorIssue(k, f"{k}: DS18B20 disconnected (-127)"))
+                continue
+            if k.startswith("ds18b20_") and val == DS18B20_POWER_ON_RESET_C:
+                issues.append(SensorIssue(k, f"{k}: DS18B20 power-on value 85.0"))
+                continue
+            if not (-200.0 <= val <= 1000.0):
+                issues.append(SensorIssue(k, f"{k}: {val} out of thermal range [-200, 1000]"))
+                continue
+        extra_sensors[k] = val
 
     v, i, p = values["voltage_v"], values["current_a"], values["power_w"]
     if v is not None and i is not None:
@@ -140,6 +209,7 @@ def validate_message(
         fan_state=fan_state,
         sensor_status=status,
         sensor_states=sensor_states,
+        extra_sensors=extra_sensors,
         quality_flags=flags,
         data_source=data_source,  # type: ignore[arg-type]
         **values,

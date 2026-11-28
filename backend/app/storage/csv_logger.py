@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import os
 import shutil
 from collections.abc import Iterable
@@ -18,8 +19,11 @@ from app.models.schemas import Measurement
 CSV_FIELDS = [
     "timestamp_utc", "sequence", "voltage_v", "current_a", "power_w",
     "panel_temperature_c", "ambient_temperature_c", "case_temperature_c",
+    "heatsink_temperature_c", "battery_temperature_c", "mcu_temperature_c",
+    "mpu_temperature_c", "surface_temperature_c", "humidity_pct", "pressure_hpa",
+    "wind_speed_ms", "irradiance_measured_wm2",
     "battery_voltage_v", "battery_current_a", "fan_state", "sensor_status",
-    "data_source", "boot_id", "quality_flags",
+    "data_source", "boot_id", "quality_flags", "extra_sensors",
 ]
 
 
@@ -40,6 +44,15 @@ def measurement_to_row(m: Measurement) -> dict[str, str]:
         "panel_temperature_c": fmt(m.panel_temperature_c),
         "ambient_temperature_c": fmt(m.ambient_temperature_c),
         "case_temperature_c": fmt(m.case_temperature_c),
+        "heatsink_temperature_c": fmt(m.heatsink_temperature_c),
+        "battery_temperature_c": fmt(m.battery_temperature_c),
+        "mcu_temperature_c": fmt(m.mcu_temperature_c),
+        "mpu_temperature_c": fmt(m.mpu_temperature_c),
+        "surface_temperature_c": fmt(m.surface_temperature_c),
+        "humidity_pct": fmt(m.humidity_pct),
+        "pressure_hpa": fmt(m.pressure_hpa),
+        "wind_speed_ms": fmt(m.wind_speed_ms),
+        "irradiance_measured_wm2": fmt(m.irradiance_measured_wm2),
         "battery_voltage_v": fmt(m.battery_voltage_v),
         "battery_current_a": fmt(m.battery_current_a),
         "fan_state": "" if m.fan_state is None else ("1" if m.fan_state else "0"),
@@ -47,15 +60,30 @@ def measurement_to_row(m: Measurement) -> dict[str, str]:
         "data_source": m.data_source,
         "boot_id": m.boot_id,
         "quality_flags": "|".join(m.quality_flags),
+        "extra_sensors": json.dumps(m.extra_sensors, separators=(",", ":")) if m.extra_sensors else "",
     }
 
 
-def to_csv_text(measurements: Iterable[Measurement]) -> str:
+def to_csv_text(measurements: Iterable[Measurement], *, expand_extra: bool = True) -> str:
+    items = list(measurements)
+    extra_keys: list[str] = []
+    if expand_extra:
+        seen: set[str] = set()
+        for m in items:
+            for k in sorted(m.extra_sensors):
+                if k not in CSV_FIELDS and k not in seen:
+                    seen.add(k)
+                    extra_keys.append(k)
+    fields = CSV_FIELDS + [f"extra.{k}" for k in extra_keys]
     buf = io.StringIO()
-    w = csv.DictWriter(buf, fieldnames=CSV_FIELDS, lineterminator="\n")
+    w = csv.DictWriter(buf, fieldnames=fields, lineterminator="\n")
     w.writeheader()
-    for m in measurements:
-        w.writerow(measurement_to_row(m))
+    for m in items:
+        row = measurement_to_row(m)
+        for k in extra_keys:
+            v = m.extra_sensors.get(k)
+            row[f"extra.{k}"] = "" if v is None else f"{v:.6g}"
+        w.writerow(row)
     return buf.getvalue()
 
 

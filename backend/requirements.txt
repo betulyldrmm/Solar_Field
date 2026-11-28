@@ -2,3 +2,4 @@ fastapi>=0.110,<1.0
 pydantic>=2.6,<3
 uvicorn>=0.27
 tzdata>=2024.1  # Windows has no IANA time zone database (Europe/Istanbul)
+msgpack>=1.0    # UNO Q arduino-router RPC socket

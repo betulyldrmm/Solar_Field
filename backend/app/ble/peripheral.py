@@ -29,7 +29,15 @@ import sys
 import tempfile
 from pathlib import Path
 
-from app.ble.protocol import DEVICE_NAME, LIVE_CHAR_UUID, LIVE_PACKET_SIZE, SERVICE_UUID, encode_live
+from app.ble.protocol import (
+    DEVICE_NAME,
+    LIVE_CHAR_UUID,
+    LIVE_PACKET_SIZE,
+    SERVICE_UUID,
+    TELEMETRY_JSON_CHAR_UUID,
+    encode_live,
+    encode_telemetry_json,
+)
 from app.config import Settings
 from app.storage.database import Database
 
@@ -74,8 +82,11 @@ async def serve(source: LatestSource, interval_s: float) -> None:
 
     server = BlessServer(name=DEVICE_NAME)
     last_packet = bytearray(LIVE_PACKET_SIZE)
+    last_json = bytearray(b"{}")
 
     def on_read(characteristic, **_kwargs):  # a plain read returns the newest packet too
+        if str(characteristic.uuid).lower() == TELEMETRY_JSON_CHAR_UUID.lower():
+            return last_json
         return last_packet
 
     server.read_request_func = on_read
@@ -85,6 +96,13 @@ async def serve(source: LatestSource, interval_s: float) -> None:
         LIVE_CHAR_UUID,
         GATTCharacteristicProperties.read | GATTCharacteristicProperties.notify,
         bytearray(last_packet),
+        GATTAttributePermissions.readable,
+    )
+    await server.add_new_characteristic(
+        SERVICE_UUID,
+        TELEMETRY_JSON_CHAR_UUID,
+        GATTCharacteristicProperties.read,
+        bytearray(last_json),
         GATTAttributePermissions.readable,
     )
     await server.start()
@@ -101,7 +119,9 @@ async def serve(source: LatestSource, interval_s: float) -> None:
             if m is not None and (m.boot_id, m.sequence) != last_key:
                 last_key = (m.boot_id, m.sequence)
                 last_packet[:] = encode_live(m)
+                last_json[:] = encode_telemetry_json(m)
                 server.get_characteristic(LIVE_CHAR_UUID).value = bytearray(last_packet)
+                server.get_characteristic(TELEMETRY_JSON_CHAR_UUID).value = bytearray(last_json)
                 server.update_value(SERVICE_UUID, LIVE_CHAR_UUID)  # notify subscribers
                 log.info("sent seq=%s t=%s T=%s", m.sequence, m.timestamp_utc, m.panel_temperature_c)
             elif m is None:

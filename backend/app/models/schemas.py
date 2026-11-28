@@ -28,11 +28,21 @@ class Measurement(BaseModel):
     panel_temperature_c: float | None = None
     ambient_temperature_c: float | None = None
     case_temperature_c: float | None = None
+    heatsink_temperature_c: float | None = None
+    battery_temperature_c: float | None = None
+    mcu_temperature_c: float | None = None
+    mpu_temperature_c: float | None = None
+    surface_temperature_c: float | None = None
+    humidity_pct: float | None = None
+    pressure_hpa: float | None = None
+    wind_speed_ms: float | None = None
+    irradiance_measured_wm2: float | None = None
     battery_voltage_v: float | None = None
     battery_current_a: float | None = None
     fan_state: bool | None = None
     sensor_status: str = "OK"
     sensor_states: dict[str, str] = Field(default_factory=dict)
+    extra_sensors: dict[str, float] = Field(default_factory=dict)
     quality_flags: list[str] = Field(default_factory=list)
     data_source: DataSource
 

@@ -30,6 +30,7 @@ power_w is not sent; the receiver computes V*I and labels it "calculated".
 
 from __future__ import annotations
 
+import json
 import struct
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -38,6 +39,7 @@ from typing import Any
 # Custom 128-bit UUIDs (random, project-specific). Keep in sync with docs/ble.md.
 SERVICE_UUID = "5f1d0001-3a6b-4c2e-9d6e-5f0a1c7b2e10"
 LIVE_CHAR_UUID = "5f1d0002-3a6b-4c2e-9d6e-5f0a1c7b2e10"
+TELEMETRY_JSON_CHAR_UUID = "5f1d0003-3a6b-4c2e-9d6e-5f0a1c7b2e10"
 DEVICE_NAME = "SolarFieldStation"
 
 PROTOCOL_VERSION = 1
@@ -144,3 +146,45 @@ def decode_live(data: bytes | bytearray) -> LivePacket:
         fan_state=bool(flags & FLAG_FAN_ON) if flags & FLAG_FAN_VALID else None,
         data_source="simulation" if flags & FLAG_SIMULATION else "hardware",
     )
+
+
+def encode_telemetry_json(m: Any, max_bytes: int = 512) -> bytes:
+    """Compact UTF-8 JSON snapshot including extended heat & multi-sensor channels."""
+    payload: dict[str, Any] = {
+        "seq": m.sequence,
+        "ts": int(m.timestamp_utc.timestamp()),
+        "src": m.data_source,
+        "st": getattr(m, "sensor_status", "OK"),
+    }
+    optional_fields = (
+        ("v", "voltage_v"),
+        ("i", "current_a"),
+        ("p", "power_w"),
+        ("tp", "panel_temperature_c"),
+        ("ta", "ambient_temperature_c"),
+        ("tc", "case_temperature_c"),
+        ("th", "heatsink_temperature_c"),
+        ("tb", "battery_temperature_c"),
+        ("tmcu", "mcu_temperature_c"),
+        ("tmpu", "mpu_temperature_c"),
+        ("tsurf", "surface_temperature_c"),
+        ("hum", "humidity_pct"),
+        ("pres", "pressure_hpa"),
+        ("wind", "wind_speed_ms"),
+        ("irr", "irradiance_measured_wm2"),
+        ("bv", "battery_voltage_v"),
+        ("bi", "battery_current_a"),
+        ("fan", "fan_state"),
+    )
+    for short, attr in optional_fields:
+        val = getattr(m, attr, None)
+        if val is not None:
+            payload[short] = round(val, 4) if isinstance(val, float) else val
+    extra = getattr(m, "extra_sensors", None) or {}
+    if extra:
+        payload["ex"] = {k: round(v, 3) for k, v in extra.items()}
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    if len(raw) <= max_bytes:
+        return raw
+    payload.pop("ex", None)
+    return json.dumps(payload, separators=(",", ":")).encode("utf-8")[:max_bytes]

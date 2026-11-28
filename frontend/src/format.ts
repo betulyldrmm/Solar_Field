@@ -19,6 +19,13 @@ export function time(iso: string | null | undefined): string {
   return new Date(iso).toLocaleTimeString("tr-TR", { timeZone: TZ, hour: "2-digit", minute: "2-digit" });
 }
 
+export function timeSec(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleTimeString("tr-TR", {
+    timeZone: TZ, hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
+}
+
 export function dateTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   return new Date(iso).toLocaleString("tr-TR", {

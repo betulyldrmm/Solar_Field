@@ -1,0 +1,19 @@
+[Unit]
+Description=Solar Field Station BLE GATT Live & Telemetry Server
+After=bluetooth.service solar-field-web.service
+Wants=bluetooth.service solar-field-web.service
+
+[Service]
+Type=simple
+User=arduino
+Group=arduino
+SupplementaryGroups=bluetooth
+WorkingDirectory=/home/arduino/Solar_Field/backend
+Environment="SFS_DATA_DIR=/home/arduino/Solar_Field/backend/data"
+Environment="SFS_DATA_MODE=hardware"
+ExecStart=/home/arduino/Solar_Field/backend/.venv/bin/python -m app.ble.peripheral --interval 5
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

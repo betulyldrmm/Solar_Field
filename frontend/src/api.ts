@@ -14,13 +14,76 @@ export interface Measurement {
   panel_temperature_c: number | null;
   ambient_temperature_c: number | null;
   case_temperature_c: number | null;
+  heatsink_temperature_c: number | null;
+  battery_temperature_c: number | null;
+  mcu_temperature_c: number | null;
+  mpu_temperature_c: number | null;
+  surface_temperature_c: number | null;
+  humidity_pct: number | null;
+  pressure_hpa: number | null;
+  wind_speed_ms: number | null;
+  irradiance_measured_wm2: number | null;
   battery_voltage_v: number | null;
   battery_current_a: number | null;
   fan_state: boolean | null;
   sensor_status: string;
   sensor_states: Record<string, string>;
+  extra_sensors: Record<string, number>;
   quality_flags: string[];
   data_source: DataSource;
+}
+
+export interface BluetoothInfo {
+  device_name: string;
+  adapter_mac: string | null;
+  pan_ip: string;
+  pan_url: string;
+  connected_peers: string[];
+  ble_service_uuid: string;
+  ble_live_char_uuid: string;
+  ble_json_char_uuid: string;
+}
+
+export interface LivePoint {
+  timestamp_utc: string;
+  seq: number;
+  uptime_s: number;
+  mcu_online: boolean;
+  mcu_age_s: number | null;
+  cpu_pct: number;
+  mem_pct: number;
+  mem_used_mb: number;
+  disk_free_mb: number;
+  wifi_dbm: number | null;
+  mpu_temperature_c: number | null;
+  mcu_temperature_c: number | null;
+  panel_temperature_c: number | null;
+  ambient_temperature_c: number | null;
+  case_temperature_c: number | null;
+  heatsink_temperature_c: number | null;
+  battery_temperature_c: number | null;
+  surface_temperature_c: number | null;
+  humidity_pct: number | null;
+  pressure_hpa: number | null;
+  voltage_v: number | null;
+  current_a: number | null;
+  power_w: number | null;
+  irradiance_wm2: number | null;
+  battery_voltage_v: number | null;
+  battery_current_a: number | null;
+  battery_soc_pct: number | null;
+  fan_state: boolean | null;
+  adc_mv: Record<string, number>;
+  thermal_zones: Record<string, number>;
+  extra_sensors: Record<string, number>;
+  data_source: DataSource;
+}
+
+export interface LiveTelemetryResponse {
+  source: DataSource;
+  count: number;
+  latest: LivePoint | null;
+  series: LivePoint[];
 }
 
 export interface MeasurementPage {
@@ -159,12 +222,18 @@ export class ApiError extends Error {
 
 const BASE = import.meta.env.VITE_API_BASE ?? "/api";
 
+function withSource(path: string, source?: DataSource): string {
+  if (!source) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}source=${encodeURIComponent(source)}`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
     res = await fetch(BASE + path, init);
   } catch {
-    throw new ApiError(0, "Backend'e ulaşılamıyor. uvicorn çalışıyor mu?");
+    throw new ApiError(0, "Backend'e ulaşılamıyor. UNO Q servisi çalışıyor mu?");
   }
   if (!res.ok) {
     let detail = res.statusText;
@@ -180,21 +249,28 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  deviceStatus: () => request<DeviceStatus>("/device/status"),
-  latest: () => request<Measurement>("/measurements/latest"),
-  history: (startIso: string, limit = 5000) =>
+  bluetoothInfo: () => request<BluetoothInfo>("/bluetooth/info"),
+  liveTelemetry: (source?: DataSource, limit = 120) =>
+    request<LiveTelemetryResponse>(withSource(`/live/telemetry?limit=${limit}`, source)),
+  deviceStatus: (source?: DataSource) => request<DeviceStatus>(withSource("/device/status", source)),
+  latest: (source?: DataSource) => request<Measurement>(withSource("/measurements/latest", source)),
+  history: (startIso: string, limit = 5000, source?: DataSource) =>
     request<MeasurementPage>(
-      `/measurements/history?start=${encodeURIComponent(startIso)}&limit=${limit}&order=asc`,
+      withSource(
+        `/measurements/history?start=${encodeURIComponent(startIso)}&limit=${limit}&order=asc`,
+        source,
+      ),
     ),
-  energyDaily: (days = 14) => request<DailyEnergy[]>(`/energy/daily?days=${days}`),
-  energySummary: () => request<EnergySummary>("/energy/summary"),
-  estimate: (body: EstimateRequest) =>
-    request<EstimateResponse>("/simulation/estimate", {
+  energyDaily: (days = 14, source?: DataSource) =>
+    request<DailyEnergy[]>(withSource(`/energy/daily?days=${days}`, source)),
+  energySummary: (source?: DataSource) => request<EnergySummary>(withSource("/energy/summary", source)),
+  estimate: (body: EstimateRequest, source?: DataSource) =>
+    request<EstimateResponse>(withSource("/simulation/estimate", source), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
-  config: () => request<SystemConfigOut>("/config"),
+  config: (source?: DataSource) => request<SystemConfigOut>(withSource("/config", source)),
   saveConfig: (cfg: SystemConfig, token: string) =>
     request<SystemConfigOut>("/config", {
       method: "PUT",
@@ -202,6 +278,14 @@ export const api = {
       body: JSON.stringify(cfg),
     }),
   events: (limit = 100) => request<EventsResponse>(`/events?limit=${limit}`),
-  csvUrl: (startIso?: string) =>
-    `${BASE}/measurements/export.csv${startIso ? `?start=${encodeURIComponent(startIso)}` : ""}`,
+  csvUrl: (startIso?: string, source?: DataSource) =>
+    withSource(
+      `${BASE}/measurements/export.csv${startIso ? `?start=${encodeURIComponent(startIso)}` : ""}`,
+      source,
+    ),
+  jsonUrl: (startIso?: string, source?: DataSource) =>
+    withSource(
+      `${BASE}/measurements/export.json${startIso ? `?start=${encodeURIComponent(startIso)}` : ""}`,
+      source,
+    ),
 };

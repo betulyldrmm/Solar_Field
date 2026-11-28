@@ -53,6 +53,14 @@ class Settings:
     # Storage safety
     min_free_disk_mb: int = 200
     csv_fsync_every: int = 1  # fsync every row: at 5 min/row nothing may be lost on power cut
+    # UNO Q hardware bridge + web serving + Bluetooth captive portal
+    router_socket: str = "/var/run/arduino-router.sock"
+    enable_bridge: bool = True
+    frontend_dist: Path = field(
+        default_factory=lambda: Path(__file__).resolve().parents[2] / "frontend" / "dist"
+    )
+    captive_portal_url: str = ""
+    bt_pan_ip: str = "10.44.0.1"
 
     @property
     def db_path(self) -> Path:
@@ -84,4 +92,10 @@ class Settings:
         if s.battery_series_cells < 1 or s.battery_series_cells > 4:
             raise ValueError("SFS_BATTERY_SERIES_CELLS must be 1..4")
         s.min_free_disk_mb = int(os.environ.get("SFS_MIN_FREE_DISK_MB", s.min_free_disk_mb))
+        s.router_socket = os.environ.get("SFS_ROUTER_SOCKET", s.router_socket)
+        s.enable_bridge = _env_bool("SFS_ENABLE_BRIDGE", s.enable_bridge)
+        if "SFS_FRONTEND_DIST" in os.environ:
+            s.frontend_dist = Path(os.environ["SFS_FRONTEND_DIST"])
+        s.captive_portal_url = os.environ.get("SFS_CAPTIVE_PORTAL_URL", s.captive_portal_url).strip()
+        s.bt_pan_ip = os.environ.get("SFS_BT_PAN_IP", s.bt_pan_ip).strip()
         return s

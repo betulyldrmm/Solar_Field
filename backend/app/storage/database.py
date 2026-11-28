@@ -80,13 +80,29 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX idx_sensor_errors_time ON sensor_errors (timestamp_utc);
     """,
+    # v2 — extended thermal, environmental, and dynamic multi-sensor MCU channels
+    """
+    ALTER TABLE measurements ADD COLUMN heatsink_temperature_c REAL;
+    ALTER TABLE measurements ADD COLUMN battery_temperature_c REAL;
+    ALTER TABLE measurements ADD COLUMN mcu_temperature_c REAL;
+    ALTER TABLE measurements ADD COLUMN mpu_temperature_c REAL;
+    ALTER TABLE measurements ADD COLUMN surface_temperature_c REAL;
+    ALTER TABLE measurements ADD COLUMN humidity_pct REAL;
+    ALTER TABLE measurements ADD COLUMN pressure_hpa REAL;
+    ALTER TABLE measurements ADD COLUMN wind_speed_ms REAL;
+    ALTER TABLE measurements ADD COLUMN irradiance_measured_wm2 REAL;
+    ALTER TABLE measurements ADD COLUMN extra_sensors TEXT NOT NULL DEFAULT '{}';
+    """,
 ]
 
 MEASUREMENT_COLUMNS = [
     "timestamp_utc", "boot_id", "sequence", "voltage_v", "current_a", "power_w",
     "panel_temperature_c", "ambient_temperature_c", "case_temperature_c",
+    "heatsink_temperature_c", "battery_temperature_c", "mcu_temperature_c",
+    "mpu_temperature_c", "surface_temperature_c", "humidity_pct", "pressure_hpa",
+    "wind_speed_ms", "irradiance_measured_wm2",
     "battery_voltage_v", "battery_current_a", "fan_state", "sensor_status",
-    "sensor_states", "quality_flags", "data_source",
+    "sensor_states", "extra_sensors", "quality_flags", "data_source",
 ]
 
 
@@ -149,9 +165,13 @@ class Database:
         row = (
             _iso(m.timestamp_utc), m.boot_id, m.sequence, m.voltage_v, m.current_a, m.power_w,
             m.panel_temperature_c, m.ambient_temperature_c, m.case_temperature_c,
+            m.heatsink_temperature_c, m.battery_temperature_c, m.mcu_temperature_c,
+            m.mpu_temperature_c, m.surface_temperature_c, m.humidity_pct, m.pressure_hpa,
+            m.wind_speed_ms, m.irradiance_measured_wm2,
             m.battery_voltage_v, m.battery_current_a,
             None if m.fan_state is None else int(m.fan_state),
-            m.sensor_status, json.dumps(m.sensor_states), json.dumps(m.quality_flags),
+            m.sensor_status, json.dumps(m.sensor_states), json.dumps(m.extra_sensors),
+            json.dumps(m.quality_flags),
             m.data_source,
         )
         placeholders = ",".join("?" * len(MEASUREMENT_COLUMNS))
@@ -168,6 +188,7 @@ class Database:
         d = dict(r)
         d.pop("id", None)
         d["sensor_states"] = json.loads(d["sensor_states"])
+        d["extra_sensors"] = json.loads(d.get("extra_sensors") or "{}")
         d["quality_flags"] = json.loads(d["quality_flags"])
         d["fan_state"] = None if d["fan_state"] is None else bool(d["fan_state"])
         return Measurement(**d)
